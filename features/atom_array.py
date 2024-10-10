@@ -9,20 +9,24 @@ The issue with other formats is that the list of constituents could vary.
 """
 import os
 from dataclasses import dataclass, field
+from io import BufferedIOBase, BytesIO, StringIO
+from os import PathLike
 from typing import Any, ClassVar, Dict, Optional, Union
 
 import biotite
+import foldcomp
 import numpy as np
 import pyarrow as pa
 from biotite import structure as bs
 from biotite.sequence import ProteinSequence
 from biotite.structure import filter_amino_acids, get_chains
-from biotite.structure.io import pdb, pdbx
+from biotite.structure.io.pdb import PDBFile
+from biotite.structure.io.pdbx import CIFFile
 from datasets import config
 from datasets.download.download_config import DownloadConfig
 from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
-from datasets.utils.py_utils import string_to_dict, no_op_if_value_is_null
+from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 
 def encode_biotite_atom_array(array: bs.AtomArray) -> str:
@@ -58,8 +62,12 @@ def filter_chains(structure, chain_ids):
     return structure
 
 
+def is_open_compatible(file):
+    return isinstance(file, (str, bytes, PathLike))
+
+
 def load_structure(
-    fpath,
+    fpath_or_handler,
     format="pdb",
     model: int = 1,
     extra_fields=None,
@@ -76,14 +84,41 @@ def load_structure(
         biotite.structure.AtomArray
     """
     if format == "cif":
-        pdbxf = pdbx.PDBxFile.read(fpath)
-        structure = pdbx.get_structure(
-            pdbxf, model=1, assembly_id=assembly_id, extra_fields=extra_fields
+        pdbxf = CIFFile.read(fpath_or_handler)
+        structure = pdbxf.get_structure(
+            pdbxf,
+            model=1,
+            assembly_id=assembly_id,
+            extra_fields=extra_fields,
+            chain_ids=chain_ids,
         )
     elif format == "pdb":
-        pdbf = pdb.PDBFile.read(fpath)
-        structure = pdb.get_structure(
-            pdbf, model=1, assembly_id=assembly_id, extra_fields=extra_fields
+        pdbf = PDBFile.read(fpath_or_handler)
+        structure = pdbf.get_structure(
+            pdbf,
+            model=1,
+            assembly_id=assembly_id,
+            extra_fields=extra_fields,
+            chain_ids=chain_ids,
+        )
+    elif format == "fcz":
+        if is_open_compatible(fpath_or_handler):
+            with open(fpath_or_handler, "rb") as fcz:
+                fcz_binary = fcz.read()
+        elif isinstance(fpath_or_handler, BufferedIOBase):
+            fcz_binary = fcz.read()
+        else:
+            raise ValueError(f"Unsupported file type: expected path or bytes handler")
+        (_, pdb_str) = foldcomp.decompress(fcz_binary)
+        lines = pdb_str.splitlines()
+        pdbf = PDBFile()
+        pdbf.lines = lines
+        structure = pdbf.get_structure(
+            pdbf,
+            model=1,
+            assembly_id=assembly_id,
+            extra_fields=extra_fields,
+            chain_ids=chain_ids,
         )
     else:
         raise ValueError(f"Unsupported file format: {format}")
@@ -115,13 +150,17 @@ class AtomArray:
 
     decode: bool = True
     id: Optional[str] = None
-    chain_id: Optional[str] = None
+    chain_ids: Optional[Union[str, List[str]]] = None
     assembly_id: Optional[int] = None  # TODO: properly understand this
     # Automatically constructed
     with_occupancy: bool = False
     with_b_factor: bool = False
     with_atom_id: bool = False
     with_charge: bool = False
+    encode_with_foldcomp: bool = False
+    foldcomp_anchor_residue_threshold: int = (
+        25  # < 0.1 A RMSD (less than noise typically applied in generative models)
+    )
     dtype: ClassVar[str] = "bs.AtomArrray"
     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
     _type: str = field(default="AtomArray", init=False, repr=False)
@@ -134,7 +173,7 @@ class AtomArray:
         extra_fields = []
         if self.with_occupancy:
             extra_fields.append("occupancy")
-        if self.with_bfactor:
+        if self.with_b_factor:
             extra_fields.append("b_factor")
         if self.with_atom_id:
             extra_fields.append("atom_id")
@@ -160,7 +199,14 @@ class AtomArray:
         elif isinstance(value, bytes):
             return {"path": None, "bytes": value}
         elif isinstance(value, bs.AtomArray):
-            return {"path": None, "bytes": encode_biotite_atom_array(value)}
+            return {
+                "path": None,
+                "bytes": encode_biotite_atom_array(
+                    value,
+                    encode_with_foldcomp=self.encode_with_foldcomp,
+                    foldcomp_anchor_residue_threshold=self.foldcomp_anchor_residue_threshold,
+                ),
+            }
         elif value.get("path") is not None and os.path.isfile(value["path"]):
             # we set "bytes": None to not duplicate the data if they're already available locally
             return {"bytes": None, "path": value.get("path")}
@@ -169,7 +215,7 @@ class AtomArray:
             return {"bytes": value.get("bytes"), "path": value.get("path")}
         else:
             raise ValueError(
-                f"A structu sample should have one of 'path' or 'bytes' but they are missing or None in {value}."
+                f"A structure sample should have one of 'path' or 'bytes' but they are missing or None in {value}."
             )
 
     def decode_example(self, value: dict, token_per_repo_id=None) -> "bs.AtomArray":
@@ -239,15 +285,34 @@ class AtomArray:
                         )
 
         else:
-            contents = bytes_.decode().splitlines()
-            # assume pdb format in bytes for now - is bytes only possible internally?
-            atom_array = load_structure(
-                contents,
-                assembly_id=self.assembly_id,
-                chain_id=self.chain_id,
-                format="pdb",
-                extra_fields=self.extra_fields,
-            )
+            if path is not None:
+                if file_format == "fcz":
+                    fhandler = BytesIO(bytes_)
+                elif file_format == "pdb":
+                    fhandler = StringIO(bytes_.decode())
+                elif file_format == "cif":
+                    fhandler = StringIO(bytes_.decode())
+                else:
+                    raise ValueError(
+                        f"Unsupported file format: {file_format} for bytes input"
+                    )
+                atom_array = load_structure(
+                    fhandler,
+                    assembly_id=self.assembly_id,
+                    chain_id=self.chain_id,
+                    format=file_format,
+                    extra_fields=self.extra_fields,
+                )
+            else:
+                contents = StringIO(bytes_.decode)
+                # assume pdb format in bytes for now - is bytes only possible internally?
+                atom_array = load_structure(
+                    contents,
+                    assembly_id=self.assembly_id,
+                    chain_id=self.chain_id,
+                    format="pdb",
+                    extra_fields=self.extra_fields,
+                )
         return atom_array
 
     def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:
