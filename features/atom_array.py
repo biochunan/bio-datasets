@@ -87,7 +87,7 @@ def load_structure(
         pdbxf = CIFFile.read(fpath_or_handler)
         structure = pdbxf.get_structure(
             pdbxf,
-            model=1,
+            model=model,
             assembly_id=assembly_id,
             extra_fields=extra_fields,
             chain_ids=chain_ids,
@@ -96,7 +96,7 @@ def load_structure(
         pdbf = PDBFile.read(fpath_or_handler)
         structure = pdbf.get_structure(
             pdbf,
-            model=1,
+            model=model,
             assembly_id=assembly_id,
             extra_fields=extra_fields,
             chain_ids=chain_ids,
@@ -115,7 +115,7 @@ def load_structure(
         pdbf.lines = lines
         structure = pdbf.get_structure(
             pdbf,
-            model=1,
+            model=model,
             assembly_id=assembly_id,
             extra_fields=extra_fields,
             chain_ids=chain_ids,
