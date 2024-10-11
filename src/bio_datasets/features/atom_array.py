@@ -11,10 +11,9 @@ import os
 from dataclasses import dataclass, field
 from io import BufferedIOBase, BytesIO, StringIO
 from os import PathLike
-from typing import Any, ClassVar, Dict, Optional, Union
+from typing import Any, ClassVar, Optional, Union, List
 
 import biotite
-import foldcomp
 import numpy as np
 import pyarrow as pa
 from biotite import structure as bs
@@ -24,10 +23,45 @@ from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile
 from datasets import config
 from datasets.download.download_config import DownloadConfig
-from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
-from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
+from datasets.utils.py_utils import string_to_dict
 from datasets.features.features import register_feature
+from bio_datasets import config as bio_config
+from bio_datasets import constants as bio_constants
+from .features import AtomArrayExtensionType
+
+
+def atom_array_from_dict(d: dict) -> bs.AtomArray:
+    sequence = d["sequence"]
+    annots_keys = [k for k in d.keys() if k in AtomArrayExtensionType.extra_annots]
+    if "backbone_coords" in d:
+        assert len(sequence) == len(d["backbone_coords"]["N"])
+        atoms = []
+        for res_ix, (aa, res_coords) in enumerate(
+            zip(sequence, d["backbone_coords"])
+        ):
+            res_name = ProteinSequence.convert_letter_1to3(aa)
+            for atom_ix, atom_name in enumerate(bio_constants.BACKBONE_ATOMS):
+                annots = {}
+                for k in annots_keys:
+                    annots[k] = d[k][res_ix]
+                atom = bs.Atom(
+                    coord=res_coords[atom_ix],
+                    chain_id="A",
+                    res_id=res_ix + 1,
+                    res_name=res_name,
+                    hetero=False,
+                    atom_name=atom_name,
+                    element=atom_name[0],
+                    **annots,
+                )
+                atoms.append(atom)
+        arr = bs.array(atoms)
+        return arr
+    elif "atom37_coords" in d:
+        raise NotImplementedError("Atom37 not supported yet")
+    else:
+        raise ValueError("No coordinates found")
 
 
 def encode_biotite_atom_array(array: bs.AtomArray) -> str:
@@ -103,6 +137,9 @@ def load_structure(
             chain_ids=chain_ids,
         )
     elif format == "fcz":
+        if not bio_config.FOLDCOMP_AVAILABLE:
+            raise ImportError("Foldcomp is not installed. Please install it with `pip install foldcomp`")
+        import foldcomp
         if is_open_compatible(fpath_or_handler):
             with open(fpath_or_handler, "rb") as fcz:
                 fcz_binary = fcz.read()
@@ -131,12 +168,12 @@ class _AtomArrayFeature:
     def __init__(
         self,
         chain_ids: Optional[Union[str, List[str]]] = None,
-        assembly_id: Optional[int] = None,  # TODO: properly understand this
-        # Automatically constructed
+        assembly_id: Optional[int] = None,
         with_occupancy: bool = False,
         with_b_factor: bool = False,
         with_atom_id: bool = False,
         with_charge: bool = False,
+        with_element: bool = False,
     ):
         self.chain_ids = chain_ids
         self.assembly_id = assembly_id
@@ -144,13 +181,15 @@ class _AtomArrayFeature:
         self.with_b_factor = with_b_factor
         self.with_atom_id = with_atom_id
         self.with_charge = with_charge
+        self.with_element = with_element
 
 
 @dataclass
 class AtomArray(_AtomArrayFeature):
     """AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
-    This feature stores the array directly.
+    This feature stores the array directly as a pa struct (basically a dictionary of arrays),
+    as defined in the AtomArrayExtensionType.
     """
     shape: tuple
     dtype: str
@@ -159,7 +198,7 @@ class AtomArray(_AtomArrayFeature):
     _type: str = field(default="AtomArray", init=False, repr=False)   # probably requires registered feature type
 
     def __call__(self):
-        pa_type = globals()[self.__class__.__name__ + "ExtensionType"](self.shape, self.dtype)
+        pa_type = AtomArrayExtensionType(self.with_occupancy, self.with_b_factor, self.with_atom_id, self.with_charge, self.with_element)
         return pa_type
 
 
@@ -167,12 +206,18 @@ register_feature(AtomArray, "AtomArray")
 
 
 @dataclass
-class BiomolecularStructure(_AtomArrayFeature):
-    """BiomolecularStructure [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
+class BiomolecularStructureFile(_AtomArrayFeature):
+    """BiomolecularStructureFile [`Feature`] to read macromolecular atomic structure data from supported file types.
+    The file contents is serialized as bytes or a file path (or both) within an Arrow table.
+    The file contents are automatically decoded to a biotite AtomArray (if mode=="array") or a
+    Biopython structure (if mode=="structure") when loading data from the dataset.
 
-    This feature stores the file path and/or the file contents as bytes. (Q. what determines which?)
+    This is similar to the Image feature in the HF datasets library.
 
-    Input: The BiomolecularStructure feature accepts as input:
+    - AtomArray documentation: https://www.biotite-python.org/latest/apidoc/biotite.structure.AtomArray.html#biotite.structure.AtomArray
+    - Structure documentation: https://biopython.org/wiki/The_Biopython_Structural_Bioinformatics_FAQ#the-structure-object
+
+    Input: The BiomolecularStructureFile feature accepts as (encodeable) input (Q. where would 'input' typically occur):
     - A `str`: Absolute path to the structure file (i.e. random access is allowed).
     - A `dict` with the keys:
 
@@ -181,13 +226,36 @@ class BiomolecularStructure(_AtomArrayFeature):
 
       This is useful for archived files with sequential access.
     - A `biotite.AtomArray` object.
+    - TODO: a Biopython structure object
+    - TODO: a file handler or file contents string?
+    - A dictionary with the required keys:
+        - sequence
+        - backbone_coords: a dictionary with keys:
+            - N
+            - CA
+            - C
+            - O
+        - atom37_coords: an array of shape (N, 37, 3)
+        - atom37_mask: a boolean array of shape (N, 37)
+        Only backbone_coords or atom37_coords + mask need to be provided, not both.
+        All other keys are optional, but must correspond to fields in the AtomArrayExtensionType:
+        - chain_id
+        - res_id
+        - ins_code
+        - res_name
+        - hetero
+        - atom_name
+        - box
+        - bonds
+        - occupancy
+        - b_factor
+        - atom_id
+        - charge
 
     Args:
         decode (`bool`, defaults to `True`):
             Whether to decode the structure data. If `False`,
             returns the underlying dictionary in the format `{"path": structure_path, "bytes": structure_bytes}`.
-
-    # TODO: Examples:
     """
 
     decode: bool = True
@@ -196,12 +264,12 @@ class BiomolecularStructure(_AtomArrayFeature):
     foldcomp_anchor_residue_threshold: int = (
         25  # < 0.1 A RMSD (less than noise typically applied in generative models)
     )
-    # dtype: ClassVar[str] = "bs.AtomArrray"
-    mode: "array"
+    mode: str = "array"
     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
     _type: str = field(default="AtomArray", init=False, repr=False)
 
     def __post_init__(self):
+        # q: what does dtype actually do?
         if self.mode == "array":
             self.dtype = "bs.AtomArrray"
         elif self.mode == "structure":
@@ -232,6 +300,9 @@ class BiomolecularStructure(_AtomArrayFeature):
             return {"path": value, "bytes": None}
         elif isinstance(value, bytes):
             return {"path": None, "bytes": value}
+        elif isinstance(value, dict):
+            value = atom_array_from_dict(value)
+            return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
             return {
                 "path": None,
@@ -350,9 +421,7 @@ class BiomolecularStructure(_AtomArrayFeature):
         return atom_array
 
 
-register_feature(BiomolecularStructure, "BiomolecularStructure")
-
-BACKBONE_ATOMS = ["N", "CA", "C", "O"]
+register_feature(BiomolecularStructureFile, "BiomolecularStructureFile")
 
 
 def filter_backbone(array):
@@ -373,12 +442,13 @@ def filter_backbone(array):
         is a part of the peptide backbone.
     """
 
-    return filter_atom_names(array, BACKBONE_ATOMS) & filter_amino_acids(array)
+    return filter_atom_names(array, bio_constants.BACKBONE_ATOMS) & filter_amino_acids(array)
 
 
 @dataclass
-class ProteinBackboneStructure(BiomolecularStructure):
-    """BackboneAtomArray [`Feature`] to read protein backbone structure data from a PDB file.
+class ProteinBackboneStructureFile(BiomolecularStructureFile):
+    """BackboneAtomArray [`Feature`] to read/store protein backbone structure data from a PDB file.
+    Basically a convenience class to support lower-memory storage of protein backbone data.
 
     TODO: support other formats
 
@@ -413,78 +483,9 @@ class ProteinBackboneStructure(BiomolecularStructure):
         Returns:
             `dict` with "path" and "bytes" fields
         """
-        if isinstance(value, Dict):
-            atoms = []
-            if "seq" in value:
-                sequence = value["seq"]
-            elif "sequence" in value:
-                sequence = value["sequence"]
-            else:
-                raise ValueError("Sequence not found")
-            if "coords" in value:
-                coords = value["coords"]
-                if isinstance(coords, list):
-                    coords = np.array(coords)
-                if isinstance(coords, np.ndarray):
-                    assert coords.shape == (
-                        len(sequence),
-                        4,
-                        3,
-                    ), "Coordinates shape must be (N, 4, 3)"
-                    res_coords = [
-                        {
-                            "N": res_coords[0],
-                            "CA": res_coords[1],
-                            "C": res_coords[2],
-                            "O": res_coords[3],
-                        }
-                        for res_coords in coords
-                    ]
-                elif isinstance(coords, dict):
-                    assert set(coords.keys()) == set(
-                        BACKBONE_ATOMS
-                    ), "Coordinate dict must contain all backbone atoms"
-                    assert (
-                        len(coords["N"])
-                        == len(coords["CA"])
-                        == len(coords["C"])
-                        == len(coords["O"])
-                        == len(sequence)
-                    ), "All backbone coordinates must have the same length"
-                    res_coords = []
-                    for res_ix in range(len(sequence)):
-                        res_coords.append({k: v[res_ix] for k, v in coords.items()})
-                else:
-                    raise ValueError(f"Unsupported coordinate type: {type(coords)}")
-            elif "N" in value and "CA" in value and "C" in value and "O" in value:
-                assert (
-                    len(value["N"])
-                    == len(value["CA"])
-                    == len(value["C"])
-                    == len(value["O"])
-                    == len(sequence)
-                ), "All backbone coordinates must have the same length"
-                res_coords = []
-                for res_ix in range(len(sequence)):
-                    res_coords.append({k: v[res_ix] for k, v in value.items()})
-            else:
-                raise ValueError("Coordinates not found")
-
-            atoms = []
-            for res_ix, (aa, res_coords) in enumerate(zip(sequence, res_coords)):
-                res_name = ProteinSequence.convert_letter_1to3(aa)
-                for atom_ix, atom_name in enumerate(BACKBONE_ATOMS):
-                    atom = bs.Atom(
-                        coord=res_coords[atom_ix],
-                        chain_id="A",
-                        res_id=res_ix + 1,
-                        res_name=res_name,
-                        hetero=False,
-                        atom_name=atom_name,
-                        element=atom_name[0],
-                    )
-                    atoms.append(atom)
-            value = bs.array(atoms)
+        if isinstance(value, dict):
+            value = atom_array_from_dict(value)
+            value = filter_backbone(value)
         elif isinstance(value, bs.AtomArray):
             value = filter_backbone(value)
         return super().encode_example(value)
@@ -511,4 +512,4 @@ class ProteinBackboneStructure(BiomolecularStructure):
         return filter_backbone(atom_array)
 
 
-register_feature(ProteinBackboneStructure, "ProteinBackboneStructure")
+register_feature(ProteinBackboneStructureFile, "ProteinBackboneStructureFile")
