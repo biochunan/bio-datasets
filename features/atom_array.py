@@ -27,6 +27,7 @@ from datasets.download.download_config import DownloadConfig
 from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
+from datasets.features.features import register_feature
 
 
 def encode_biotite_atom_array(array: bs.AtomArray) -> str:
@@ -126,11 +127,52 @@ def load_structure(
     return structure
 
 
+class _AtomArrayFeature:
+    def __init__(
+        self,
+        chain_ids: Optional[Union[str, List[str]]] = None,
+        assembly_id: Optional[int] = None,  # TODO: properly understand this
+        # Automatically constructed
+        with_occupancy: bool = False,
+        with_b_factor: bool = False,
+        with_atom_id: bool = False,
+        with_charge: bool = False,
+    ):
+        self.chain_ids = chain_ids
+        self.assembly_id = assembly_id
+        self.with_occupancy = with_occupancy
+        self.with_b_factor = with_b_factor
+        self.with_atom_id = with_atom_id
+        self.with_charge = with_charge
+
+
 @dataclass
-class AtomArray:
+class AtomArray(_AtomArrayFeature):
     """AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
-    Input: The AtomArray feature accepts as input:
+    This feature stores the array directly.
+    """
+    shape: tuple
+    dtype: str
+    id: Optional[str] = None
+    # Automatically constructed
+    _type: str = field(default="AtomArray", init=False, repr=False)   # probably requires registered feature type
+
+    def __call__(self):
+        pa_type = globals()[self.__class__.__name__ + "ExtensionType"](self.shape, self.dtype)
+        return pa_type
+
+
+register_feature(AtomArray, "AtomArray")
+
+
+@dataclass
+class BiomolecularStructure(_AtomArrayFeature):
+    """BiomolecularStructure [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
+
+    This feature stores the file path and/or the file contents as bytes. (Q. what determines which?)
+
+    Input: The BiomolecularStructure feature accepts as input:
     - A `str`: Absolute path to the structure file (i.e. random access is allowed).
     - A `dict` with the keys:
 
@@ -150,20 +192,20 @@ class AtomArray:
 
     decode: bool = True
     id: Optional[str] = None
-    chain_ids: Optional[Union[str, List[str]]] = None
-    assembly_id: Optional[int] = None  # TODO: properly understand this
-    # Automatically constructed
-    with_occupancy: bool = False
-    with_b_factor: bool = False
-    with_atom_id: bool = False
-    with_charge: bool = False
     encode_with_foldcomp: bool = False
     foldcomp_anchor_residue_threshold: int = (
         25  # < 0.1 A RMSD (less than noise typically applied in generative models)
     )
-    dtype: ClassVar[str] = "bs.AtomArrray"
+    # dtype: ClassVar[str] = "bs.AtomArrray"
+    mode: "array"
     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
     _type: str = field(default="AtomArray", init=False, repr=False)
+
+    def __post_init__(self):
+        if self.mode == "array":
+            self.dtype = "bs.AtomArrray"
+        elif self.mode == "structure":
+            raise NotImplementedError()  # TODO use Biopython
 
     def __call__(self):
         return self.pa_type
@@ -183,15 +225,7 @@ class AtomArray:
     def encode_example(self, value: Union[str, bytes, biotite.AtomArray]) -> dict:
         """Encode example into a format for Arrow.
 
-        For now we encode the pdb str.
-        TODO: support encoding a dictionary of coords
-
-        Args:
-            value (`str`, `biotite.AtomArray`):
-                Data passed as input to AtomArray feature.
-
-        Returns:
-            `dict` with "path" and "bytes" fields
+        This determines what gets written to the Arrow file.
         """
 
         if isinstance(value, str):
@@ -315,103 +349,8 @@ class AtomArray:
                 )
         return atom_array
 
-    def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:
-        """If in the decodable state, return the feature itself, otherwise flatten the feature into a dictionary."""
-        from datasets.features import Value
 
-        return (
-            self
-            if self.decode
-            else {
-                "bytes": Value("binary"),
-                "path": Value("string"),
-            }
-        )
-
-    def cast_storage(
-        self, storage: Union[pa.StringArray, pa.StructArray, pa.BinaryArray]
-    ) -> pa.StructArray:
-        """
-        Cast an Arrow array to the structure arrow storage type.
-        The Arrow types that can be converted to the structure pyarrow storage type are:
-
-        - `pa.string()` - it must contain the "path" data
-        - `pa.binary()` - it must contain the structure bytes
-        - `pa.struct({"bytes": pa.binary()})`
-        - `pa.struct({"path": pa.string()})`
-        - `pa.struct({"bytes": pa.binary(), "path": pa.string()})`  - order doesn't matter
-
-        Args:
-            storage (`Union[pa.StringArray, pa.StructArray, pa.ListArray]`):
-                PyArrow array to cast.
-
-        Returns:
-            `pa.StructArray`: Array in the Structure arrow storage type, that is
-                `pa.struct({"bytes": pa.binary(), "path": pa.string()})`.
-        """
-        if pa.types.is_string(storage.type):
-            bytes_array = pa.array([None] * len(storage), type=pa.binary())
-            storage = pa.StructArray.from_arrays(
-                [bytes_array, storage], ["bytes", "path"], mask=storage.is_null()
-            )
-        elif pa.types.is_binary(storage.type):
-            path_array = pa.array([None] * len(storage), type=pa.string())
-            storage = pa.StructArray.from_arrays(
-                [storage, path_array], ["bytes", "path"], mask=storage.is_null()
-            )
-        elif pa.types.is_struct(storage.type):
-            if storage.type.get_field_index("bytes") >= 0:
-                bytes_array = storage.field("bytes")
-            else:
-                bytes_array = pa.array([None] * len(storage), type=pa.binary())
-            if storage.type.get_field_index("path") >= 0:
-                path_array = storage.field("path")
-            else:
-                path_array = pa.array([None] * len(storage), type=pa.string())
-            storage = pa.StructArray.from_arrays(
-                [bytes_array, path_array], ["bytes", "path"], mask=storage.is_null()
-            )
-        return array_cast(storage, self.pa_type)
-
-    def embed_storage(self, storage: pa.StructArray) -> pa.StructArray:
-        """Embed structure files into the Arrow array.
-
-        Args:
-            storage (`pa.StructArray`):
-                PyArrow array to embed.
-
-        Returns:
-            `pa.StructArray`: Array in the Structure arrow storage type, that is
-                `pa.struct({"bytes": pa.binary(), "path": pa.string()})`.
-        """
-
-        @no_op_if_value_is_null
-        def path_to_bytes(path):
-            with xopen(path, "rb") as f:
-                bytes_ = f.read()
-            return bytes_
-
-        bytes_array = pa.array(
-            [
-                (path_to_bytes(x["path"]) if x["bytes"] is None else x["bytes"])
-                if x is not None
-                else None
-                for x in storage.to_pylist()
-            ],
-            type=pa.binary(),
-        )
-        path_array = pa.array(
-            [
-                os.path.basename(path) if path is not None else None
-                for path in storage.field("path").to_pylist()
-            ],
-            type=pa.string(),
-        )
-        storage = pa.StructArray.from_arrays(
-            [bytes_array, path_array], ["bytes", "path"], mask=bytes_array.is_null()
-        )
-        return array_cast(storage, self.pa_type)
-
+register_feature(BiomolecularStructure, "BiomolecularStructure")
 
 BACKBONE_ATOMS = ["N", "CA", "C", "O"]
 
@@ -438,7 +377,7 @@ def filter_backbone(array):
 
 
 @dataclass
-class BackboneAtomArray:
+class ProteinBackboneStructure(BiomolecularStructure):
     """BackboneAtomArray [`Feature`] to read protein backbone structure data from a PDB file.
 
     TODO: support other formats
@@ -570,3 +509,6 @@ class BackboneAtomArray:
         """
         atom_array = super().decode_example(value, token_per_repo_id)
         return filter_backbone(atom_array)
+
+
+register_feature(ProteinBackboneStructure, "ProteinBackboneStructure")
