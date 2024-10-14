@@ -37,6 +37,17 @@ if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
 
 
+FILE_TYPE_TO_EXT = {
+    "pdb": "pdb",
+    "PDB": "pdb",
+    "CIF": "cif",
+    "cif": "cif",
+    "FCZ": "fcz",
+    "fcz": "fcz",
+    "foldcomp": "fcz",
+}
+
+
 extra_annots = [
     "b_factor",
     "occupancy",
@@ -111,6 +122,7 @@ def load_structure(
     Returns:
         biotite.structure.AtomArray
     """
+    format = FILE_TYPE_TO_EXT[format]
     if format == "cif":
         pdbxf = CIFFile.read(fpath_or_handler)
         structure = pdbxf.get_structure(
@@ -125,8 +137,11 @@ def load_structure(
         )
     elif format == "fcz":
         if not bio_config.FOLDCOMP_AVAILABLE:
-            raise ImportError("Foldcomp is not installed. Please install it with `pip install foldcomp`")
+            raise ImportError(
+                "Foldcomp is not installed. Please install it with `pip install foldcomp`"
+            )
         import foldcomp
+
         if is_open_compatible(fpath_or_handler):
             with open(fpath_or_handler, "rb") as fcz:
                 fcz_binary = fcz.read()
@@ -186,7 +201,9 @@ def atom_array_from_dict(d: dict) -> bs.AtomArray:
         raise ValueError("No coordinates found")
 
 
-def encode_biotite_atom_array(array: bs.AtomArray, encode_with_foldcomp: bool = False, name: Optional[str] = None) -> str:
+def encode_biotite_atom_array(
+    array: bs.AtomArray, encode_with_foldcomp: bool = False, name: Optional[str] = None
+) -> str:
     """
     Encode a biotite AtomArray to pdb string bytes.
 
@@ -197,6 +214,7 @@ def encode_biotite_atom_array(array: bs.AtomArray, encode_with_foldcomp: bool = 
     contents = "\n".join(pdb.lines) + "\n"
     if encode_with_foldcomp:
         import foldcomp
+
         if name is None:
             name = getattr(array, "name", str(uuid.uuid4()))
         return foldcomp.compress(name, contents)
@@ -475,9 +493,13 @@ class AtomArray(_AtomArrayFeature):
             return atom_array_struct
         elif isinstance(value, (str, os.PathLike)):
             if os.path.exists(value):
-                pass
+                file_type = xsplitext(value)[1][1:].lower()
+                return self.encode_example(load_structure(value, format=file_type))
         elif isinstance(value, bytes):
             # assume it encodes file contents.
+            # TODO: automatically check for foldcomp format
+            fhandler = StringIO(value.decode())
+            return self.encode_example(load_structure(fhandler, format="pdb"))
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
 
@@ -570,7 +592,9 @@ class Structure(_AtomArrayFeature):
     id: Optional[str] = None
     encode_with_foldcomp: bool = False
     mode: str = "array"
-    pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string(), "type": pa.string()})
+    pa_type: ClassVar[Any] = pa.struct(
+        {"bytes": pa.binary(), "path": pa.string(), "type": pa.string()}
+    )
     _type: str = field(default="Structure", init=False, repr=False)
 
     def __call__(self):
@@ -718,11 +742,11 @@ class Structure(_AtomArrayFeature):
             if storage.type.get_field_index("path") >= 0:
                 path_array = storage.field("path")
             else:
-                path_array = pa.array([None]* len(storage), type=pa.string())
+                path_array = pa.array([None] * len(storage), type=pa.string())
             storage = pa.StructArray.from_arrays(
                 [bytes_array, path_array, storage.field("type")],
                 names=["bytes", "path", "type"],
-                mask=storage.is_null()
+                mask=storage.is_null(),
             )
         else:
             raise ValueError(f"Unsupported storage type: {storage.type}")
