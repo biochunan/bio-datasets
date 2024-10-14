@@ -9,7 +9,7 @@ from datasets import Dataset, Features, Value
 from bio_datasets.features import Structure
 
 
-def examples_generator(db_file, features: Features, max_examples: Optional[int] = None):
+def examples_generator(db_file, max_examples: Optional[int] = None):
     assert os.path.exists(db_file)
     with foldcomp.open(db_file, decompress=True) as db:
         for (name, pdb_str) in itertools.islice(db, max_examples):
@@ -17,9 +17,8 @@ def examples_generator(db_file, features: Features, max_examples: Optional[int] 
             pdb_bytes = foldcomp.compress(name, pdb_str)
             example = {
                 "name": name,
-                "structur": {"bytes": pdb_bytes, "path": None, "type": "fcz"},
+                "structure": {"bytes": pdb_bytes, "path": None, "type": "fcz"},
             }
-            example = features.encode_example(example)
             yield example
 
 
@@ -34,7 +33,7 @@ def main(repo_id: str, db_file: str):
     with tempfile.TemporaryDirectory() as temp_dir:
         ds = Dataset.from_generator(
             examples_generator,
-            gen_kwargs={"db_file": db_file, "features": features},
+            gen_kwargs={"db_file": db_file},
             features=features,
             cache_dir=temp_dir,
         )

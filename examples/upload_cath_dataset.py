@@ -48,6 +48,7 @@ def examples_generator(coords: List[Dict], features: Features):
             }
             coords_dict["coords"] = coords
         chain_id = coords_dict["name"].split(".")[1]
+        # a dictionary with this format is one of the formats accepted by AtomArray.encode_example
         example["backbone"] = {
             "sequence": coords_dict["seq"],
             "backbone_coords": coords_dict["coords"],
@@ -56,7 +57,6 @@ def examples_generator(coords: List[Dict], features: Features):
         example["num_chains"] = coords_dict["num_chains"]
         example["name"] = coords_dict["name"]
         example["CATH"] = coords_dict["CATH"]
-        example = features.encode_example(example)
         yield example
 
 

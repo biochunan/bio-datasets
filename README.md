@@ -44,11 +44,24 @@ dataset = load_dataset(
 )
 ex = dataset[0]  # a dict with keys `name` and `structure` (a biotite AtomArray)
 features = dataset.info.features
+print(type(ex["structure"]))
 print(features)
 ```
 ```
-
+biotite.structure.AtomArray
+{'name': Value(dtype='string', id=None), 'structure': Structure(requires_encoding=True, requires_decoding=True, with_box=False, with_bonds=False, with_occupancy=False, with_b_factor=False, with_res_id=False, with_atom_id=False, with_charge=False, with_element=False, with_ins_code=False, with_hetero=False, decode=True, id=None, encode_with_foldcomp=False, mode='array')}
 ```
+
+Structure data is stored internally in either foldcomp compressed PDB format or as PDB format byte-strings.
+bio_datasets automatically handles conversion from this format to the biotite AtomArray format for downstream processing.
+Of course, converting from PDB format to biotite format involves some overhead (though it's still possible to iterate over ~100 pdb files a second.)
+
+If you want even quicker processing, we also support storing data in a native array format that
+supports blazingly fast iteration over samples.
+
+To combine the fast iteration offered by array-based storage with foldcomp-style compression,
+we offer the option to store structure data in a discretised internal coordinate-based representation.
+
 
 ### Loading data with bio features from local files
 

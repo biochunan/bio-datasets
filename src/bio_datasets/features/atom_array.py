@@ -7,20 +7,35 @@ A couple of options for this:
 3. Atom37
 The issue with other formats is that the list of constituents could vary.
 """
+import os
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from io import BufferedIOBase, BytesIO, StringIO
+from os import PathLike
+from typing import Any, ClassVar, Optional, Union
 
 import numpy as np
 import pyarrow as pa
 from biotite import structure as bs
 from biotite.sequence import ProteinSequence
+from biotite.structure import get_chains
 from biotite.structure.filter import filter_amino_acids
+from biotite.structure.io.pdb import PDBFile
+from biotite.structure.io.pdbx import CIFFile
 from biotite.structure.residues import get_residues
-from datasets import Feature
-from datasets.features.features import register_feature, string_to_arrow
+from datasets import Feature, config
+from datasets.download import DownloadConfig
+from datasets.features.features import string_to_arrow
 from datasets.table import array_cast
+from datasets.utils.file_utils import is_local_path, xopen, xsplitext
+from datasets.utils.py_utils import string_to_dict
 
+from bio_datasets import config as bio_config
 from bio_datasets import constants as bio_constants
+
+if bio_config.FOLDCOMP_AVAILABLE:
+    import foldcomp
+
 
 extra_annots = [
     "b_factor",
@@ -29,6 +44,23 @@ extra_annots = [
     "element",  # seems redundant
     "atom_id",
 ]
+
+
+def filter_chains(structure, chain_ids):
+    # TODO: double-check numeric chain id is ok...
+    all_chains = get_chains(structure)
+    if len(all_chains) == 0:
+        raise ValueError("No chains found in the input file.")
+    if chain_ids is None:
+        return structure
+    if isinstance(chain_ids, str):
+        chain_ids = [chain_ids]
+    for chain in chain_ids:
+        if chain not in all_chains:
+            raise ValueError(f"Chain {chain} not found in input file")
+    chain_filter = [a.chain_id in chain_ids for a in structure]
+    structure = structure[chain_filter]
+    return structure
 
 
 def get_sequence(struct: bs.AtomArray):
@@ -62,6 +94,59 @@ def filter_backbone(array):
     return filter_atom_names(array, bio_constants.BACKBONE_ATOMS) & filter_amino_acids(
         array
     )
+
+
+def load_structure(
+    fpath_or_handler,
+    format="pdb",
+    model: int = 1,
+    extra_fields=None,
+):
+    """
+    TODO: support foldcomp format, binary cif format
+    TODO: support model choice / multiple models (multiple conformations)
+    Args:
+        fpath: filepath to either pdb or cif file
+        chain: the chain id or list of chain ids to load
+    Returns:
+        biotite.structure.AtomArray
+    """
+    if format == "cif":
+        pdbxf = CIFFile.read(fpath_or_handler)
+        structure = pdbxf.get_structure(
+            model=model,
+            extra_fields=extra_fields,
+        )
+    elif format == "pdb":
+        pdbf = PDBFile.read(fpath_or_handler)
+        structure = pdbf.get_structure(
+            model=model,
+            extra_fields=extra_fields,
+        )
+    elif format == "fcz":
+        if not bio_config.FOLDCOMP_AVAILABLE:
+            raise ImportError("Foldcomp is not installed. Please install it with `pip install foldcomp`")
+        import foldcomp
+        if is_open_compatible(fpath_or_handler):
+            with open(fpath_or_handler, "rb") as fcz:
+                fcz_binary = fcz.read()
+        elif isinstance(fpath_or_handler, BufferedIOBase):
+            fcz_binary = fcz.read()
+        else:
+            raise ValueError(f"Unsupported file type: expected path or bytes handler")
+        (_, pdb_str) = foldcomp.decompress(fcz_binary)
+        lines = pdb_str.splitlines()
+        pdbf = PDBFile()
+        pdbf.lines = lines
+        structure = pdbf.get_structure(
+            pdbf,
+            model=model,
+            extra_fields=extra_fields,
+        )
+    else:
+        raise ValueError(f"Unsupported file format: {format}")
+
+    return structure
 
 
 def atom_array_from_dict(d: dict) -> bs.AtomArray:
@@ -99,6 +184,28 @@ def atom_array_from_dict(d: dict) -> bs.AtomArray:
         raise NotImplementedError("Atom37 not supported yet")
     else:
         raise ValueError("No coordinates found")
+
+
+def encode_biotite_atom_array(array: bs.AtomArray, encode_with_foldcomp: bool = False, name: Optional[str] = None) -> str:
+    """
+    Encode a biotite AtomArray to pdb string bytes.
+
+    TODO: support foldcomp encoding
+    """
+    pdb = pdb.PDBFile()
+    pdb.set_structure(array)
+    contents = "\n".join(pdb.lines) + "\n"
+    if encode_with_foldcomp:
+        import foldcomp
+        if name is None:
+            name = getattr(array, "name", str(uuid.uuid4()))
+        return foldcomp.compress(name, contents)
+    else:
+        return contents.encode()
+
+
+def is_open_compatible(file):
+    return isinstance(file, (str, bytes, PathLike))
 
 
 # n.b. metadata like chain_id, pdb_id, etc. should be stored separately
@@ -366,6 +473,11 @@ class AtomArray(_AtomArrayFeature):
                     atom_array_struct[attr] = getattr(value, attr)
 
             return atom_array_struct
+        elif isinstance(value, (str, os.PathLike)):
+            if os.path.exists(value):
+                pass
+        elif isinstance(value, bytes):
+            # assume it encodes file contents.
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
 
@@ -420,3 +532,198 @@ class AtomArray(_AtomArrayFeature):
         if self.chain_id is not None:
             arr.set_annotation("chain_id", np.array([self.chain_id] * length))
         return arr
+
+
+@dataclass
+class Structure(_AtomArrayFeature):
+    """Structure [`Feature`] to read (bio)molecular atomic structure data from supported file types.
+    The file contents are serialized as bytes, file path and file type within an Arrow table.
+    The file contents are automatically decoded to a biotite AtomArray (if mode=="array") or a
+    Biopython structure (if mode=="structure") when loading data from the dataset.
+
+    This is similar to the Image feature in the HF datasets library.
+
+    - AtomArray documentation: https://www.biotite-python.org/latest/apidoc/biotite.structure.AtomArray.html#biotite.structure.AtomArray
+    - Structure documentation: https://biopython.org/wiki/The_Biopython_Structural_Bioinformatics_FAQ#the-structure-object
+
+    Input: The BiomolecularStructureFile feature accepts as (encodeable) input (Q. where would 'input' typically occur):
+    - A `str`: Absolute path to the structure file (i.e. random access is allowed).
+    - A `dict` with the keys:
+
+        - `path`: String with relative path of the structure file to the archive file.
+        - `bytes`: Bytes of the structure file.
+
+      This is useful for archived files with sequential access.
+    - A `biotite.structure.AtomArray` object.
+    - TODO: a Biopython structure object
+    - TODO: a file handler or file contents string?
+
+    Args:
+        decode (`bool`, defaults to `True`):
+            Whether to decode the structure data. If `False`,
+            returns the underlying dictionary in the format `{"path": structure_path, "bytes": structure_bytes, "type": structure_type}`.
+    """
+
+    requires_encoding: bool = True
+    requires_decoding: bool = True
+    decode: bool = True
+    id: Optional[str] = None
+    encode_with_foldcomp: bool = False
+    mode: str = "array"
+    pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string(), "type": pa.string()})
+    _type: str = field(default="Structure", init=False, repr=False)
+
+    def __call__(self):
+        return self.pa_type
+
+    def encode_example(self, value: Union[str, bytes, bs.AtomArray]) -> dict:
+        """Encode example into a format for Arrow.
+
+        This determines what gets written to the Arrow file.
+        """
+        if isinstance(value, str):
+            if file_type is None:
+                file_type = xsplitext(value)[1][1:].lower()
+            return {"path": value, "bytes": None, "type": file_type}
+        elif isinstance(value, bytes):
+            # just assume pdb format for now
+            return {"path": None, "bytes": value, "type": "pdb"}
+        elif isinstance(value, bs.AtomArray):
+            return {
+                "path": None,
+                "bytes": encode_biotite_atom_array(
+                    value,
+                    encode_with_foldcomp=self.encode_with_foldcomp,
+                ),
+                "type": "pdb" if not self.encode_with_foldcomp else "fcz",
+            }
+        elif value.get("path") is not None and os.path.isfile(value["path"]):
+            file_type = value.get("type", None)
+            path = value["path"]
+            if file_type is None:
+                file_type = xsplitext(path)[1][1:].lower()
+            # we set "bytes": None to not duplicate the data if they're already available locally
+            # (this assumes invocation in what context?)
+            return {"bytes": None, "path": path, "type": file_type or "pdb"}
+        elif value.get("bytes") is not None or value.get("path") is not None:
+            # store the Structure bytes, and path is optionally used to infer the Structure format using the file extension
+            file_type = value.get("type")
+            path = value.get("path")
+            if file_type is None and path is not None:
+                file_type = xsplitext(path)[1][1:].lower()
+            return {"bytes": value.get("bytes"), "path": path, "type": file_type}
+        else:
+            raise ValueError(
+                f"A structure sample should have one of 'path' or 'bytes' but they are missing or None in {value}."
+            )
+
+    def decode_example(self, value: dict, token_per_repo_id=None) -> "bs.AtomArray":
+        """Decode example structure file into AtomArray data.
+
+        Args:
+            value (`str` or `dict`):
+                A string with the absolute structure file path, a dictionary with
+                keys:
+
+                - `path`: String with absolute or relative structure file path.
+                - `bytes`: The bytes of the structure file.
+                - `type`: The type of the structure file (e.g. "pdb", "cif", "fcz")
+                Must be not None.
+            token_per_repo_id (`dict`, *optional*):
+                To access and decode
+                structure files from private repositories on the Hub, you can pass
+                a dictionary repo_id (`str`) -> token (`bool` or `str`).
+
+        Returns:
+            `biotite.AtomArray`
+        """
+        if not self.decode:
+            raise RuntimeError(
+                "Decoding is disabled for this feature. Please use Structure(decode=True) instead."
+            )
+
+        if token_per_repo_id is None:
+            token_per_repo_id = {}
+
+        path, bytes_, file_type = value["path"], value["bytes"], value["type"]
+        if bytes_ is None:
+            if path is None:
+                raise ValueError(
+                    f"A structure should have one of 'path' or 'bytes' but both are None in {value}."
+                )
+            else:
+                if is_local_path(path):
+                    atom_array = load_structure(
+                        path,
+                        format=file_type,
+                        extra_fields=self.extra_fields,
+                    )
+                else:
+                    source_url = path.split("::")[-1]
+                    pattern = (
+                        config.HUB_DATASETS_URL
+                        if source_url.startswith(config.HF_ENDPOINT)
+                        else config.HUB_DATASETS_HFFS_URL
+                    )
+                    try:
+                        repo_id = string_to_dict(source_url, pattern)["repo_id"]
+                        token = token_per_repo_id.get(repo_id)
+                    except ValueError:
+                        token = None
+                    download_config = DownloadConfig(token=token)
+                    with xopen(path, "r", download_config=download_config) as f:
+                        atom_array = load_structure(
+                            f,
+                            format=file_type or "pdb",
+                            extra_fields=self.extra_fields,
+                        )
+
+        else:
+            if path is not None:
+                if file_type == "fcz":
+                    fhandler = BytesIO(bytes_)
+                elif file_type == "pdb":
+                    fhandler = StringIO(bytes_.decode())
+                elif file_type == "cif":
+                    fhandler = StringIO(bytes_.decode())
+                else:
+                    raise ValueError(
+                        f"Unsupported file format: {file_type} for bytes input"
+                    )
+                atom_array = load_structure(
+                    fhandler,
+                    format=file_type,
+                    extra_fields=self.extra_fields,
+                )
+            else:
+                if file_type == "fcz":
+                    _, pdb = foldcomp.decompress(bytes_)
+                else:
+                    pdb = bytes_.decode()
+                contents = StringIO(pdb)
+                # assume pdb format in bytes for now - is bytes only possible internally?
+                atom_array = load_structure(
+                    contents,
+                    format="pdb",
+                    extra_fields=self.extra_fields,
+                )
+        return atom_array
+
+    def cast_storage(self, storage: pa.StructArray) -> pa.StructArray:
+        if pa.types.is_struct(storage.type):
+            if storage.type.get_field_index("bytes") >= 0:
+                bytes_array = storage.field("bytes")
+            else:
+                bytes_array = pa.array([None] * len(storage), type=pa.binary())
+            if storage.type.get_field_index("path") >= 0:
+                path_array = storage.field("path")
+            else:
+                path_array = pa.array([None]* len(storage), type=pa.string())
+            storage = pa.StructArray.from_arrays(
+                [bytes_array, path_array, storage.field("type")],
+                names=["bytes", "path", "type"],
+                mask=storage.is_null()
+            )
+        else:
+            raise ValueError(f"Unsupported storage type: {storage.type}")
+        return array_cast(storage, self.pa_type)
