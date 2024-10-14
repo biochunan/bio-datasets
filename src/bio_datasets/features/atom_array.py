@@ -228,7 +228,7 @@ class AtomArray(_AtomArrayFeature):
     def _generate_array_dtype(self, dtype, shape):
         # source: datasets ArrayXDExtensionType
         dtype = string_to_arrow(dtype)
-        for d in reversed(shape):
+        for _ in reversed(shape):
             dtype = pa.list_(dtype)
             # Don't specify the size of the list, since fixed length list arrays have issues
             # being validated after slicing in pyarrow 0.17.1
@@ -420,6 +420,3 @@ class AtomArray(_AtomArrayFeature):
         if self.chain_id is not None:
             arr.set_annotation("chain_id", np.array([self.chain_id] * length))
         return arr
-
-
-register_feature(AtomArray, "AtomArray")

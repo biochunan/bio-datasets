@@ -1,8 +1,9 @@
 import argparse
-import foldcomp
 import itertools
 import os
 from typing import Optional
+
+import foldcomp
 from datasets import Dataset, Features, Value
 
 from bio_datasets.features import Structure
@@ -14,7 +15,10 @@ def examples_generator(db_file, features: Features, max_examples: Optional[int] 
         for (name, pdb_str) in itertools.islice(db, max_examples):
             # if we opened with decompress False, we wouldn't get name
             pdb_bytes = foldcomp.compress(name, pdb_str)
-            example = {"name": name, "pdb": {"bytes": pdb_bytes, "path": None, "type": "fcz"}}
+            example = {
+                "name": name,
+                "structur": {"bytes": pdb_bytes, "path": None, "type": "fcz"},
+            }
             example = features.encode_example(example)
             yield example
 
@@ -23,9 +27,10 @@ def main(repo_id: str, db_file: str):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
-        pdb=Structure(),
+        structure=Structure(),
     )
     import tempfile
+
     with tempfile.TemporaryDirectory() as temp_dir:
         ds = Dataset.from_generator(
             examples_generator,

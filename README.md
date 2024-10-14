@@ -35,6 +35,9 @@ the dependency.
 ### Loading data from the Hub
 
 ```python
+import bio_datasets  # necessary to register the custom feature types with the datasets library
+from datasets import load_dataset
+
 dataset = load_dataset(
     "graph-transformers/afdb_e_coli",
     split="train",
