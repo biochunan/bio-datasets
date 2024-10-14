@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from io import BufferedIOBase, BytesIO, StringIO
 from os import PathLike
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 
 import numpy as np
 import pyarrow as pa
@@ -156,8 +156,6 @@ def load_structure(
         if is_open_compatible(fpath_or_handler):
             with open(fpath_or_handler, "rb") as fcz:
                 fcz_binary = fcz.read()
-        elif isinstance(fpath_or_handler, BufferedIOBase):
-            fcz_binary = fcz.read()
         else:
             raise ValueError(f"Unsupported file type: expected path or bytes handler")
         (_, pdb_str) = foldcomp.decompress(fcz_binary)
@@ -165,7 +163,6 @@ def load_structure(
         pdbf = PDBFile()
         pdbf.lines = lines
         structure = pdbf.get_structure(
-            pdbf,
             model=model,
             extra_fields=extra_fields,
         )
@@ -234,7 +231,92 @@ def encode_biotite_atom_array(
 
 
 def is_open_compatible(file):
-    return isinstance(file, (str, bytes, PathLike))
+    return isinstance(file, (str, PathLike))
+
+
+def infer_type_from_structure_file_dict(d: dict) -> str:
+    if "type" in d and d["type"] is not None:
+        return d["type"]
+    elif "path" in d:
+        return xsplitext(d["path"])[1][1:]
+    elif "bytes" in d:
+        return infer_bytes_format(d["bytes"])
+    else:
+        return None
+
+
+def load_structure_from_file_dict(
+    d: dict,
+    token_per_repo_id: Optional[Dict[str, int]] = None,
+    extra_fields: Optional[List[str]] = None,
+) -> bs.AtomArray:
+    if token_per_repo_id is None:
+        token_per_repo_id = {}
+
+    path, bytes_ = d.get("path"), d.get("bytes")
+    file_type = infer_type_from_structure_file_dict(d)
+    if bytes_ is None:
+        if path is None:
+            raise ValueError(
+                f"A structure should have one of 'path' or 'bytes' but both are None in {d}."
+            )
+        else:
+            if is_local_path(path):
+                atom_array = load_structure(
+                    path,
+                    format=file_type,
+                    extra_fields=extra_fields,
+                )
+            else:
+                source_url = path.split("::")[-1]
+                pattern = (
+                    config.HUB_DATASETS_URL
+                    if source_url.startswith(config.HF_ENDPOINT)
+                    else config.HUB_DATASETS_HFFS_URL
+                )
+                try:
+                    repo_id = string_to_dict(source_url, pattern)["repo_id"]
+                    token = token_per_repo_id.get(repo_id)
+                except ValueError:
+                    token = None
+                download_config = DownloadConfig(token=token)
+                with xopen(path, "r", download_config=download_config) as f:
+                    atom_array = load_structure(
+                        f,
+                        format=file_type or "pdb",
+                        extra_fields=extra_fields,
+                    )
+
+    else:
+        if path is not None:
+            if file_type == "fcz":
+                fhandler = BytesIO(bytes_)
+            elif file_type == "pdb":
+                fhandler = StringIO(bytes_.decode())
+            elif file_type == "cif":
+                fhandler = StringIO(bytes_.decode())
+            else:
+                raise ValueError(
+                    f"Unsupported file format: {file_type} for bytes input"
+                )
+            atom_array = load_structure(
+                fhandler,
+                format=file_type,
+                extra_fields=extra_fields,
+            )
+        else:
+            if file_type == "fcz":
+                _, pdb = foldcomp.decompress(bytes_)
+            else:
+                pdb = bytes_.decode()
+            contents = StringIO(pdb)
+            # assume pdb format in bytes for now - is bytes only possible internally?
+            atom_array = load_structure(
+                contents,
+                format="pdb",
+                extra_fields=extra_fields,
+            )
+    return atom_array
 
 
 # n.b. metadata like chain_id, pdb_id, etc. should be stored separately
@@ -464,7 +546,9 @@ class AtomArray(_AtomArrayFeature):
 
     def encode_example(self, value: Union[bs.AtomArray, dict]) -> dict:
         if isinstance(value, dict):
-            # if it's already encoded, we don't need to encode it again
+            if "bytes" in value or "path" in value or "type" in value:
+                # if it's already encoded, we don't need to encode it again
+                return self.encode_example(load_structure_from_file_dict(value))
             if all([attr in value for attr in self.required_keys]):
                 return value
             value = atom_array_from_dict(value)
@@ -617,13 +701,12 @@ class Structure(_AtomArrayFeature):
 
         This determines what gets written to the Arrow file.
         """
+        file_type = infer_type_from_structure_file_dict(value)
         if isinstance(value, str):
-            if file_type is None:
-                file_type = xsplitext(value)[1][1:].lower()
             return {"path": value, "bytes": None, "type": file_type}
         elif isinstance(value, bytes):
             # just assume pdb format for now
-            return {"path": None, "bytes": value, "type": "pdb"}
+            return {"path": None, "bytes": value, "type": file_type}
         elif isinstance(value, bs.AtomArray):
             return {
                 "path": None,
@@ -634,19 +717,13 @@ class Structure(_AtomArrayFeature):
                 "type": "pdb" if not self.encode_with_foldcomp else "fcz",
             }
         elif value.get("path") is not None and os.path.isfile(value["path"]):
-            file_type = value.get("type", None)
             path = value["path"]
-            if file_type is None:
-                file_type = xsplitext(path)[1][1:].lower()
             # we set "bytes": None to not duplicate the data if they're already available locally
             # (this assumes invocation in what context?)
             return {"bytes": None, "path": path, "type": file_type or "pdb"}
         elif value.get("bytes") is not None or value.get("path") is not None:
             # store the Structure bytes, and path is optionally used to infer the Structure format using the file extension
-            file_type = value.get("type")
             path = value.get("path")
-            if file_type is None and path is not None:
-                file_type = xsplitext(path)[1][1:].lower()
             return {"bytes": value.get("bytes"), "path": path, "type": file_type}
         else:
             raise ValueError(
@@ -678,72 +755,9 @@ class Structure(_AtomArrayFeature):
                 "Decoding is disabled for this feature. Please use Structure(decode=True) instead."
             )
 
-        if token_per_repo_id is None:
-            token_per_repo_id = {}
-
-        path, bytes_, file_type = value["path"], value["bytes"], value["type"]
-        if bytes_ is None:
-            if path is None:
-                raise ValueError(
-                    f"A structure should have one of 'path' or 'bytes' but both are None in {value}."
-                )
-            else:
-                if is_local_path(path):
-                    atom_array = load_structure(
-                        path,
-                        format=file_type,
-                        extra_fields=self.extra_fields,
-                    )
-                else:
-                    source_url = path.split("::")[-1]
-                    pattern = (
-                        config.HUB_DATASETS_URL
-                        if source_url.startswith(config.HF_ENDPOINT)
-                        else config.HUB_DATASETS_HFFS_URL
-                    )
-                    try:
-                        repo_id = string_to_dict(source_url, pattern)["repo_id"]
-                        token = token_per_repo_id.get(repo_id)
-                    except ValueError:
-                        token = None
-                    download_config = DownloadConfig(token=token)
-                    with xopen(path, "r", download_config=download_config) as f:
-                        atom_array = load_structure(
-                            f,
-                            format=file_type or "pdb",
-                            extra_fields=self.extra_fields,
-                        )
-
-        else:
-            if path is not None:
-                if file_type == "fcz":
-                    fhandler = BytesIO(bytes_)
-                elif file_type == "pdb":
-                    fhandler = StringIO(bytes_.decode())
-                elif file_type == "cif":
-                    fhandler = StringIO(bytes_.decode())
-                else:
-                    raise ValueError(
-                        f"Unsupported file format: {file_type} for bytes input"
-                    )
-                atom_array = load_structure(
-                    fhandler,
-                    format=file_type,
-                    extra_fields=self.extra_fields,
-                )
-            else:
-                if file_type == "fcz":
-                    _, pdb = foldcomp.decompress(bytes_)
-                else:
-                    pdb = bytes_.decode()
-                contents = StringIO(pdb)
-                # assume pdb format in bytes for now - is bytes only possible internally?
-                atom_array = load_structure(
-                    contents,
-                    format="pdb",
-                    extra_fields=self.extra_fields,
-                )
-        return atom_array
+        return load_structure_from_file_dict(
+            value, token_per_repo_id=token_per_repo_id, extra_fields=self.extra_fields
+        )
 
     def cast_storage(self, storage: pa.StructArray) -> pa.StructArray:
         if pa.types.is_struct(storage.type):

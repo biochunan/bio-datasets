@@ -22,7 +22,7 @@ def examples_generator(db_file, max_examples: Optional[int] = None):
             yield example
 
 
-def main(repo_id: str, db_file: str, as_array: bool):
+def main(repo_id: str, db_file: str, as_array: bool, config_name: Optional[str] = None):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
@@ -37,7 +37,7 @@ def main(repo_id: str, db_file: str, as_array: bool):
             features=features,
             cache_dir=temp_dir,
         )
-        ds.push_to_hub(repo_id)
+        ds.push_to_hub(repo_id, config_name=config_name)
 
 
 if __name__ == "__main__":
@@ -46,6 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--foldcomp_db_name", type=str)
     parser.add_argument("--foldcomp_db_path", type=str)
     parser.add_argument("--as_array", action="store_true")
+    parser.add_argument("--config_name", type=str, default=None)
     args = parser.parse_args()
     if args.foldcomp_db_name is None and args.foldcomp_db_path is None:
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
@@ -56,4 +57,6 @@ if __name__ == "__main__":
             # https://github.com/steineggerlab/foldcomp/issues/60
             print("Ignoring foldcomp setup error: ", e)
         args.foldcomp_db_path = args.foldcomp_db_name
-    main(args.repo_id, args.foldcomp_db_path, args.as_array)
+    main(
+        args.repo_id, args.foldcomp_db_path, args.as_array, config_name=args.config_name
+    )
