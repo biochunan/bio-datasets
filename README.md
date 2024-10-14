@@ -4,10 +4,10 @@ Bringing bio (molecules and more) to the huggingface datasets library
 
 ## Features
 
-* Full integration with the HuggingFace datasets library including saving and loading datasets to HuggingFace hub
+* Full integration with the HuggingFace datasets library including saving and loading datasets to HuggingFace hub, memory mapping, etc.
 * Built-in support for efficient storage formats for biological data (e.g. foldcomp fcz format for protein structures)
 * Automatic conversion of data between internal storage formats and convenient formats for manipulation
-   and ml model development. 
+   and ml model development.
     - achieved by integrating established libraries for manipulating biological data (like biotite for
   biomolecular structures) into the extensible HuggingFace Datasets Feature API.
 * Ultra-fast iteration over high-dimensional arrays for both in-memory and sharded, disk-based iterable datasets,
@@ -15,9 +15,12 @@ Bringing bio (molecules and more) to the huggingface datasets library
 
 ### Supported data types
 
-| Feature name | Storage format |
-| ------------ | ---------------|
+| Feature name |   Storage format    |
+| ------------ | --------------------|
+|  AtomArray   | arrays of (cartesian or discretised internal) coordinates and annotations |
+|  Structure   | byte string encoded file format embedded into parquet columns: PDB / compressed PDB (foldcomp fcz) |
 
+feature classes can be imported with `from bio_datasets import <feature_name>`
 
 ## Installation
 
@@ -33,8 +36,8 @@ the dependency.
 
 ```python
 dataset = load_dataset(
-    "graph-transformers/afdb_e_coli", 
-    split="train", 
+    "graph-transformers/afdb_e_coli",
+    split="train",
 )
 ex = dataset[0]  # a dict with keys `name` and `structure` (a biotite AtomArray)
 features = dataset.info.features
@@ -47,7 +50,10 @@ print(features)
 ### Loading data with bio features from local files
 
 To use the built-in Feature types provided by bio-datasets, simply create a Features object
-from a dictionary mapping column names to feature types:
+from a dictionary mapping column names to feature types.
+
+Each Feature type supports various configuration options (see details in __init__ methods)
+controlling the formats in which data is stored and loaded.
 
 ```python
 from datasets import Dataset, Features
