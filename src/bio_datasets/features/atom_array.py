@@ -74,6 +74,17 @@ def filter_chains(structure, chain_ids):
     return structure
 
 
+def infer_bytes_format(b: bytes) -> str:
+    """
+    Infer the file format of a bytes object from its contents.
+    """
+    if b.startswith(b"FCMP"):
+        return "fcz"
+    else:
+        # otherwise, assume pdb for now
+        return "pdb"
+
+
 def get_sequence(struct: bs.AtomArray):
     residue_identities = get_residues(struct)[1]
     seq = "".join([ProteinSequence.convert_letter_3to1(r) for r in residue_identities])
@@ -498,8 +509,9 @@ class AtomArray(_AtomArrayFeature):
         elif isinstance(value, bytes):
             # assume it encodes file contents.
             # TODO: automatically check for foldcomp format
-            fhandler = StringIO(value.decode())
-            return self.encode_example(load_structure(fhandler, format="pdb"))
+            file_type = infer_bytes_format(value)
+            fhandler = BytesIO(value)
+            return self.encode_example(load_structure(fhandler, format=file_type))
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
 

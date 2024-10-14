@@ -6,7 +6,7 @@ from typing import Optional
 import foldcomp
 from datasets import Dataset, Features, Value
 
-from bio_datasets.features import Structure
+from bio_datasets.features import AtomArray, Structure
 
 
 def examples_generator(db_file, max_examples: Optional[int] = None):
@@ -22,11 +22,11 @@ def examples_generator(db_file, max_examples: Optional[int] = None):
             yield example
 
 
-def main(repo_id: str, db_file: str):
+def main(repo_id: str, db_file: str, as_array: bool):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
-        structure=Structure(),
+        structure=AtomArray() if as_array else Structure(),
     )
     import tempfile
 
@@ -45,6 +45,7 @@ if __name__ == "__main__":
     parser.add_argument("repo_id", type=str)
     parser.add_argument("--foldcomp_db_name", type=str)
     parser.add_argument("--foldcomp_db_path", type=str)
+    parser.add_argument("--as_array", action="store_true")
     args = parser.parse_args()
     if args.foldcomp_db_name is None and args.foldcomp_db_path is None:
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
@@ -55,4 +56,4 @@ if __name__ == "__main__":
             # https://github.com/steineggerlab/foldcomp/issues/60
             print("Ignoring foldcomp setup error: ", e)
         args.foldcomp_db_path = args.foldcomp_db_name
-    main(args.repo_id, args.foldcomp_db_path)
+    main(args.repo_id, args.foldcomp_db_path, args.as_array)
