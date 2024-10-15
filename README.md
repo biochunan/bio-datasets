@@ -132,13 +132,6 @@ will automatically be decoded into the format for manipulation configured by the
 type (e.g. AtomArray and BiomolecularStructureFile types will be decoded into biotite
 AtomArray objects for convenient manipulation.).
 
-If the user does not have the bio-datasets library installed, but downloads your dataset
-with load_dataset:
-  - if their version of datasets is sufficiently recent, load_dataset will gracefully
-    fall back to default feature types
-  - if their version of datasets is older, they will have to manually override feature types in load_dataset
-TODO: see whether a custom data loading script provides an automatic way of handling these two cases.
-
 ### Creating your own feature types
 
 TODO: add docs.
