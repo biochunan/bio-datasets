@@ -13,7 +13,6 @@ from .atom_array import (
     ProteinStructureFeature,
     StructureFeature,
 )
-from .protein import ProteinAtomArrayFeature
 
 register_feature(StructureFeature, "Structure")
 register_feature(AtomArrayFeature, "AtomArray")

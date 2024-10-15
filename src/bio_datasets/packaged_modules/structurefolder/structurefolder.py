@@ -1,10 +1,9 @@
 from typing import List
 
-import bio_datasets
 import datasets
-
 from datasets.packaged_modules.folder_based_builder import folder_based_builder
 
+import bio_datasets
 
 logger = datasets.utils.logging.get_logger(__name__)
 

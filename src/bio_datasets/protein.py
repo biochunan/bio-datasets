@@ -5,14 +5,14 @@ We simply wrap Biotite's AtomArray and AtomArrayStack to offer a few convenience
 for dealing with protein structures in an ML context.
 """
 
+from typing import List, Union
+
 import biotite.structure as bs
+import numpy as np
 from biotite.sequence import ProteinSequence
+from biotite.structure.filter import filter_amino_acids
 from biotite.structure.info.groups import amino_acid_names
 from biotite.structure.residues import get_residue_starts
-from biotite.structure.filter import filter_amino_acids
-from typing import List, Union
-import numpy as np
-
 
 AA_LETTERS = [
     "A",
@@ -77,9 +77,7 @@ def filter_backbone(array):
         is a part of the peptide backbone.
     """
 
-    return filter_atom_names(array, BACKBONE_ATOMS) & filter_amino_acids(
-        array
-    )
+    return filter_atom_names(array, BACKBONE_ATOMS) & filter_amino_acids(array)
 
 
 # TODO: add support for batched application of these functions (i.e. to multiple proteins at once)
@@ -133,9 +131,7 @@ class ProteinComplex(Protein):
 
     def __init__(self, proteins: List[Protein]):
         self._chain_ids = [prot.chain_id for prot in proteins]
-        self._proteins_lookup = {
-            prot.chain_id: prot for prot in proteins
-        }
+        self._proteins_lookup = {prot.chain_id: prot for prot in proteins}
         self.atoms = sum([prot.atoms for prot in proteins], bs.AtomArray())
 
     @property
