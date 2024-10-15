@@ -43,6 +43,9 @@ from bio_datasets.protein import (
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
 
+if bio_config.FASTPDB_AVAILABLE:
+    import fastpdb
+
 
 FILE_TYPE_TO_EXT = {
     "pdb": "pdb",
@@ -121,7 +124,10 @@ def load_structure(
             extra_fields=extra_fields,
         )
     elif format == "pdb":
-        pdbf = PDBFile.read(fpath_or_handler)
+        if bio_config.FASTPDB_AVAILABLE:
+            pdbf = fastpdb.PDBFile.read(fpath_or_handler)
+        else:
+            pdbf = PDBFile.read(fpath_or_handler)
         structure = pdbf.get_structure(
             model=model,
             extra_fields=extra_fields,
