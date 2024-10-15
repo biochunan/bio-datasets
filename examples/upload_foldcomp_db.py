@@ -48,7 +48,6 @@ def main(
             features=features,
             cache_dir=temp_dir,
         )
-        print(ds.info)
         ds.push_to_hub(repo_id, config_name=config_name or "default")
 
 

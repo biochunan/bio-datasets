@@ -30,9 +30,7 @@ from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import string_to_dict
 
 from bio_datasets import config as bio_config
-from bio_datasets.protein import AA_NAME_TO_INDEX, AA_NAMES, Protein
-
-from .features import StructFeature
+from bio_datasets.protein import AA_NAME_TO_INDEX, AA_NAMES, BACKBONE_ATOMS, Protein
 
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
@@ -160,7 +158,7 @@ def atom_array_from_dict(d: dict) -> bs.AtomArray:
             if aa == "O":
                 aa = "K"
             res_name = ProteinSequence.convert_letter_1to3(aa)
-            for atom_name in bio_constants.BACKBONE_ATOMS:
+            for atom_name in BACKBONE_ATOMS:
                 annots = {}
                 for k in annots_keys:
                     annots[k] = d[k][res_ix]
@@ -323,7 +321,7 @@ class _AtomArrayFeatureMixin:
 
 
 @dataclass
-class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
+class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     """AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
     This feature stores the array directly as a pa struct (basically a dictionary of arrays),
@@ -430,14 +428,6 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
             features.append(("ins_code", Array1D((None,), "string")))
         if self.with_box:
             features.append(("box", Array2D((3, 3), "float32")))
-        if self.with_res_id:
-            features.append(("res_id", Array1D((None,), "int16")))
-        if self.with_hetero:
-            features.append(("hetero", Array1D((None,), "bool")))
-        if self.with_ins_code:
-            features.append(("ins_code", Array1D((None,), "string")))
-        if self.with_box:
-            features.append(("box", Array2D((3, 3), "float32")))
         if self.with_bonds:
             features.append(("bond_edges", Array2D((None, 2), "int32")))
             features.append(("bond_types", Array1D((None,), "int8")))
@@ -456,7 +446,10 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
 
     def __post_init__(self):
         # init the StructFeature - since it inherits from dict, pa type inference is automatic (via get_nested_type)
-        StructFeature.__init__(self, self._make_features_dict())
+        self._features = self._make_features_dict()
+
+    def __call__(self):
+        return get_nested_type(self._features)
 
     @property
     def required_keys(self):
@@ -471,7 +464,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
         if isinstance(value, dict):
             if "bytes" in value or "path" in value or "type" in value:
                 # if it's already encoded, we don't need to encode it again
-                return self.encode_example(load_structure_from_file_dict(value))
+                struct = load_structure_from_file_dict(value)
+                return self.encode_example(struct)
             if all([attr in value for attr in self.required_keys]):
                 return value
             value = atom_array_from_dict(value)
