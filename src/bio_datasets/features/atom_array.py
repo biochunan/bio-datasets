@@ -95,12 +95,6 @@ def infer_bytes_format(b: bytes) -> str:
         return "pdb"
 
 
-# def get_sequence(struct: bs.AtomArray):
-#     residue_identities = get_residues(struct)[1]
-#     seq = "".join([ProteinSequence.convert_letter_3to1(r) for r in residue_identities])
-#     return seq
-
-
 def load_structure(
     fpath_or_handler,
     format="pdb",
@@ -588,8 +582,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             value["res_id"] = np.arange(num_atoms)
         arr = bs.AtomArray(num_atoms)
         value["res_name"] = np.array(AA_NAMES)[value["aa_index"]]
-        coords = np.stack(value.pop("coords"))
-        arr.coord = coords
+        arr.coord = value.pop("coords")
         if "bond_edges" in value:
             bonds_array = value.pop("bond_edges")
             bond_types = value.pop("bond_types")
