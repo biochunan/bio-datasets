@@ -28,7 +28,7 @@ from datasets.download import DownloadConfig
 from datasets.features.features import Feature, get_nested_type
 from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
-from datasets.utils.py_utils import string_to_dict
+from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 from bio_datasets import config as bio_config
 from bio_datasets.protein import AA_NAME_TO_INDEX, AA_NAMES, BACKBONE_ATOMS, Protein
@@ -711,6 +711,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
 
     def embed_storage(self, storage: pa.StructArray) -> pa.StructArray:
         """Embed the file contents into the Arrow table."""
+
         @no_op_if_value_is_null
         def path_to_bytes(path):
             with xopen(path, "rb") as f:
@@ -721,18 +722,25 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
                     bytes_ = f.read()
             return bytes_
 
-         bytes_array = pa.array(
+        bytes_array = pa.array(
             [
-                (path_to_bytes(x["path"]) if x["bytes"] is None else x["bytes"]) if x is not None else None
+                (path_to_bytes(x["path"]) if x["bytes"] is None else x["bytes"])
+                if x is not None
+                else None
                 for x in storage.to_pylist()
             ],
             type=pa.binary(),
         )
         path_array = pa.array(
-            [os.path.basename(path) if path is not None else None for path in storage.field("path").to_pylist()],
+            [
+                os.path.basename(path) if path is not None else None
+                for path in storage.field("path").to_pylist()
+            ],
             type=pa.string(),
         )
-        storage = pa.StructArray.from_arrays([bytes_array, path_array], ["bytes", "path"], mask=bytes_array.is_null())
+        storage = pa.StructArray.from_arrays(
+            [bytes_array, path_array], ["bytes", "path"], mask=bytes_array.is_null()
+        )
         return array_cast(storage, self.pa_type)
 
 

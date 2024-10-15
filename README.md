@@ -71,7 +71,7 @@ coordinate-based representation.
 To use the built-in Feature types provided by bio-datasets, simply create a Features object
 from a dictionary mapping column names to feature types.
 
-Each Feature type supports various configuration options (see details in __init__ methods)
+Each Feature type supports various configuration options (see details in \__init__ methods)
 controlling the formats in which data is stored and loaded.
 
 ```python
@@ -89,6 +89,9 @@ ds = Dataset.from_generator(example_generator, gen_kwargs={"pdb_file_list": pdb_
 # SHARE YOUR DATASET WITH BIO FEATURES TO THE HUB!
 ds.push_to_hub(HUB_REPO_ID)
 ```
+There are a couple of other ways of converting local files into Bio feature types:
+use cast_column (https://huggingface.co/docs/datasets/image_load#local-files) or use a folder-based dataset builder
+
 #TODO: show equivalent usage of PDBFolderBasedBuilder
 
 ### Sharing data to the hub
