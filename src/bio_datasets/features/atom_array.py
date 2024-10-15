@@ -7,13 +7,14 @@ A couple of options for this:
 3. Atom37
 The issue with other formats is that the list of constituents could vary.
 """
+import gzip
 import os
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from io import BytesIO, StringIO
 from os import PathLike
-from typing import Any, ClassVar, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pyarrow as pa
@@ -206,11 +207,14 @@ def is_open_compatible(file):
     return isinstance(file, (str, PathLike))
 
 
-def infer_type_from_structure_file_dict(d: dict) -> str:
+def infer_type_from_structure_file_dict(d: dict) -> Tuple[Optional[str], Optional[str]]:
     if "type" in d and d["type"] is not None:
         return d["type"]
     elif "path" in d:
-        return xsplitext(d["path"])[1][1:]
+        ext = xsplitext(d["path"])[1][1:]
+        if ext.endswith(".gz"):
+            ext = ext[:-3]
+        return ext
     elif "bytes" in d:
         return infer_bytes_format(d["bytes"])
     else:
@@ -622,7 +626,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         This determines what gets written to the Arrow file.
         TODO: accept Protein as input?
         """
-        file_type = infer_type_from_structure_file_dict(value)
+        file_type, _ = infer_type_from_structure_file_dict(value)
         if isinstance(value, str):
             return {"path": value, "bytes": None, "type": file_type}
         elif isinstance(value, bytes):
@@ -703,6 +707,32 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
             )
         else:
             raise ValueError(f"Unsupported storage type: {storage.type}")
+        return array_cast(storage, self.pa_type)
+
+    def embed_storage(self, storage: pa.StructArray) -> pa.StructArray:
+        """Embed the file contents into the Arrow table."""
+        @no_op_if_value_is_null
+        def path_to_bytes(path):
+            with xopen(path, "rb") as f:
+                bytes_ = f.read()
+            if path.endswith(".gz"):
+                assert is_local_path(path), "Gzipped files must have local file paths."
+                with gzip.open(path, "rb") as f:
+                    bytes_ = f.read()
+            return bytes_
+
+         bytes_array = pa.array(
+            [
+                (path_to_bytes(x["path"]) if x["bytes"] is None else x["bytes"]) if x is not None else None
+                for x in storage.to_pylist()
+            ],
+            type=pa.binary(),
+        )
+        path_array = pa.array(
+            [os.path.basename(path) if path is not None else None for path in storage.field("path").to_pylist()],
+            type=pa.string(),
+        )
+        storage = pa.StructArray.from_arrays([bytes_array, path_array], ["bytes", "path"], mask=bytes_array.is_null())
         return array_cast(storage, self.pa_type)
 
 
