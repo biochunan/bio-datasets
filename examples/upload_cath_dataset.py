@@ -1,3 +1,8 @@
+"""
+Upload the CATH dataset to the hub.
+
+c.f.https://github.com/huggingface/datasets/tree/main/templates
+"""
 import argparse
 import json
 import tempfile

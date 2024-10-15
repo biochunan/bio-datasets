@@ -1,3 +1,8 @@
+"""
+Upload a foldcomp database to the hub.
+
+c.f.https://github.com/huggingface/datasets/tree/main/templates
+"""
 import argparse
 import itertools
 import os

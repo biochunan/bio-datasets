@@ -5,7 +5,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 name = "bio_datasets"
 version = "0.1.0"
-description = "Easy to use bio datasets building on the HF datasets library"
+description = "Fast, convenient and shareable datasets for BioML"
 authors = [
     "Alex Hawkins-Hooker",
 ]
@@ -13,7 +13,7 @@ requires-python = ">=3.7"
 
 [tool.poetry.dependencies]
 biotite = ">=1.0.0"
-datasets = {git = "https://github.com/alex-hh/datasets.git", rev = "iterable-dataset-fixes-refactor"}
+datasets = {git = "https://github.com/alex-hh/datasets.git", rev = "iterable-dataset-fixes"}
 
 [tool.poetry.source]
 name = "pypi"
