@@ -12,6 +12,7 @@ import os
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from functools import partial
 from io import BytesIO, StringIO
 from os import PathLike
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
@@ -26,7 +27,7 @@ from biotite.structure.io.pdbx import CIFFile
 from datasets import Array1D, Array2D, config
 from datasets.download import DownloadConfig
 from datasets.features.features import Feature, get_nested_type
-from datasets.table import array_cast
+from datasets.table import array_cast, cast_array_to_feature
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
@@ -463,6 +464,20 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         if self.with_bonds:
             required_keys.append("bonds")
         return required_keys
+
+    def cast_storage(self, array: pa.StructArray) -> pa.StructArray:
+        array_fields = {field.name for field in array.type}
+        # c.f. cast_array_to_feature: since we don't inherit from dict, we reproduce the logic here
+        null_array = pa.array([None] * len(array))
+        arrays = [
+            cast_array_to_feature(
+                array.field(name) if name in array_fields else null_array, subfeature
+            )
+            for name, subfeature in self._features.items()
+        ]
+        return pa.StructArray.from_arrays(
+            arrays, names=list(self._features), mask=array.is_null()
+        )
 
     def encode_example(self, value: Union[bs.AtomArray, dict]) -> dict:
         if isinstance(value, dict):
