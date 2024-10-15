@@ -12,7 +12,6 @@ import os
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from functools import partial
 from io import BytesIO, StringIO
 from os import PathLike
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
@@ -32,7 +31,14 @@ from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 from bio_datasets import config as bio_config
-from bio_datasets.protein import AA_NAME_TO_INDEX, AA_NAMES, BACKBONE_ATOMS, Protein
+from bio_datasets.protein import (
+    AA_NAME_TO_INDEX,
+    AA_NAMES,
+    BACKBONE_ATOMS,
+    Protein,
+    ProteinComplex,
+    filter_backbone,
+)
 
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
@@ -534,7 +540,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
 
-    def decode_example(self, value: dict, token_per_repo_id=None) -> bs.AtomArray:
+    def decode_example(self, value: dict, token_per_repo_id=None) -> "bs.AtomArray":
         """
         def add_annotation(self, category, dtype):
         Add an annotation category, if not already existing.
@@ -641,7 +647,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         This determines what gets written to the Arrow file.
         TODO: accept Protein as input?
         """
-        file_type, _ = infer_type_from_structure_file_dict(value)
+        file_type = infer_type_from_structure_file_dict(value)
         if isinstance(value, str):
             return {"path": value, "bytes": None, "type": file_type}
         elif isinstance(value, bytes):
@@ -725,7 +731,11 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         return array_cast(storage, self.pa_type)
 
     def embed_storage(self, storage: pa.StructArray) -> pa.StructArray:
-        """Embed the file contents into the Arrow table."""
+        """Embed the file contents into the Arrow table.
+
+        Configured by the embed_external_files flag in Dataset.push_to_hub / DatasetsDict
+        TODO: check this is working as expected
+        """
 
         @no_op_if_value_is_null
         def path_to_bytes(path):
@@ -753,8 +763,11 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
             ],
             type=pa.string(),
         )
+        type_array = storage.field("type")
         storage = pa.StructArray.from_arrays(
-            [bytes_array, path_array], ["bytes", "path"], mask=bytes_array.is_null()
+            [bytes_array, path_array, type_array],
+            ["bytes", "path", "type"],
+            mask=bytes_array.is_null(),
         )
         return array_cast(storage, self.pa_type)
 
@@ -762,3 +775,26 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
 @dataclass
 class ProteinStructureFeature(StructureFeature):
     decode_as: ClassVar[str] = "protein"
+
+
+@dataclass
+class ProteinAtomArrayFeature(AtomArrayFeature):
+
+    drop_sidechains: bool = False
+    internal_coords_type: str = None  # foldcomp, idealised, or pnerf
+    _type: str = field(
+        default="Protein", init=False, repr=False
+    )  # registered feature name
+
+    def encode_example(self, value: Union[Protein, dict, bs.AtomArray]) -> dict:
+        if self.drop_sidechains:
+            if isinstance(value, bs.AtomArray):
+                value = value[filter_backbone(value)]
+            elif isinstance(value, Protein):
+                value = value.backbone()
+        return super().encode_example(value)
+
+    def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
+        return Protein(
+            super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
+        )

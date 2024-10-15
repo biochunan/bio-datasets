@@ -7,7 +7,12 @@ __all__ = [
 
 from datasets.features.features import register_feature
 
-from .atom_array import AtomArrayFeature, ProteinStructureFeature, StructureFeature
+from .atom_array import (
+    AtomArrayFeature,
+    ProteinAtomArrayFeature,
+    ProteinStructureFeature,
+    StructureFeature,
+)
 from .protein import ProteinAtomArrayFeature
 
 register_feature(StructureFeature, "Structure")
