@@ -581,7 +581,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         if "res_id" not in value:
             value["res_id"] = np.arange(num_atoms)
         arr = bs.AtomArray(num_atoms)
-        value["res_name"] = AA_NAMES[value["aa_index"]]
+        value["res_name"] = np.array(AA_NAMES)[value["aa_index"]]
         coords = np.stack(value.pop("coords"))
         arr.coord = coords
         if "bond_edges" in value:

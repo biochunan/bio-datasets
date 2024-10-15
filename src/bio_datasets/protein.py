@@ -99,7 +99,7 @@ class Protein:
         assert np.all(aa_mask), "Protein must only contain amino acids"
         assert np.unique(atoms.chain_id).size == 1, "Protein must be a single chain"
         self.atoms = atoms
-        self._aa_index = None
+        self._aa_index = getattr(atoms, "aa_index", None)
         self._residue_starts = get_residue_starts(self.atoms)
         self.chain_id = atoms.chain_id[0]
 
