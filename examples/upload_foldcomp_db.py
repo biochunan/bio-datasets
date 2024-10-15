@@ -11,7 +11,7 @@ from typing import Optional
 import foldcomp
 from datasets import Dataset, Features, Value
 
-from bio_datasets.features import AtomArray, Structure
+from bio_datasets.features import ProteinAtomArrayFeature, ProteinStructureFeature
 
 
 def examples_generator(db_file, max_examples: Optional[int] = None):
@@ -31,7 +31,7 @@ def main(repo_id: str, db_file: str, as_array: bool, config_name: Optional[str] 
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
-        structure=AtomArray() if as_array else Structure(),
+        structure=ProteinAtomArrayFeature() if as_array else ProteinStructureFeature(),
     )
     import tempfile
 

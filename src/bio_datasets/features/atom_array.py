@@ -9,8 +9,9 @@ The issue with other formats is that the list of constituents could vary.
 """
 import os
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from io import BufferedIOBase, BytesIO, StringIO
+from io import BytesIO, StringIO
 from os import PathLike
 from typing import Any, ClassVar, Dict, List, Optional, Union
 
@@ -19,22 +20,58 @@ import pyarrow as pa
 from biotite import structure as bs
 from biotite.sequence import ProteinSequence
 from biotite.structure import get_chains
-from biotite.structure.filter import filter_amino_acids
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile
-from biotite.structure.residues import get_residues
-from datasets import Feature, config
+from datasets import Array1D, Array2D, config
 from datasets.download import DownloadConfig
-from datasets.features.features import string_to_arrow
+from datasets.features.features import get_nested_type
 from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import string_to_dict
 
+from bio_datasets import Protein
 from bio_datasets import config as bio_config
 from bio_datasets import constants as bio_constants
 
+from .features import StructFeature
+
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
+
+
+AA_LETTERS = [
+    "A",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "K",
+    "L",
+    "M",
+    "N",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "V",
+    "W",
+    "Y",
+]
+AA_NAMES = [ProteinSequence.convert_letter_1to3(aa) for aa in AA_LETTERS]
+AA_LETTER_WITH_X = AA_LETTERS + ["X"]
+AA_LETTER_WITH_X_AND_GAP = AA_LETTER_WITH_X + ["-"]
+AA_LETTER_TO_INDEX = {aa: i for i, aa in enumerate(AA_LETTERS)}
+AA_NAME_TO_INDEX = {aa: i for i, aa in enumerate(AA_NAMES)}
+AA_LETTER_TO_INDEX_WITH_X = {aa: i for i, aa in enumerate(AA_LETTER_WITH_X)}
+AA_LETTER_TO_INDEX_WITH_X_AND_GAP = {
+    aa: i for i, aa in enumerate(AA_LETTER_WITH_X_AND_GAP)
+}
+
+BACKBONE_ATOMS = ["N", "CA", "C", "O"]
 
 
 FILE_TYPE_TO_EXT = {
@@ -85,37 +122,10 @@ def infer_bytes_format(b: bytes) -> str:
         return "pdb"
 
 
-def get_sequence(struct: bs.AtomArray):
-    residue_identities = get_residues(struct)[1]
-    seq = "".join([ProteinSequence.convert_letter_3to1(r) for r in residue_identities])
-    return seq
-
-
-def filter_atom_names(array, atom_names):
-    return np.isin(array.atom_name, atom_names)
-
-
-def filter_backbone(array):
-    """
-    Filter all peptide backbone atoms of one array.
-
-    N, CA, C and O
-
-    Parameters
-    ----------
-    array : AtomArray or AtomArrayStack
-        The array to be filtered.
-
-    Returns
-    -------
-    filter : ndarray, dtype=bool
-        This array is `True` for all indices in `array`, where an atom
-        is a part of the peptide backbone.
-    """
-
-    return filter_atom_names(array, bio_constants.BACKBONE_ATOMS) & filter_amino_acids(
-        array
-    )
+# def get_sequence(struct: bs.AtomArray):
+#     residue_identities = get_residues(struct)[1]
+#     seq = "".join([ProteinSequence.convert_letter_3to1(r) for r in residue_identities])
+#     return seq
 
 
 def load_structure(
@@ -321,7 +331,7 @@ def load_structure_from_file_dict(
 
 # n.b. metadata like chain_id, pdb_id, etc. should be stored separately
 @dataclass
-class _AtomArrayFeature(Feature):
+class _AtomArrayFeatureMixin:
     with_box: bool = False
     with_bonds: bool = False
     with_occupancy: bool = False
@@ -349,7 +359,7 @@ class _AtomArrayFeature(Feature):
 
 
 @dataclass
-class AtomArray(_AtomArrayFeature):
+class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
     """AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
     This feature stores the array directly as a pa struct (basically a dictionary of arrays),
@@ -436,104 +446,48 @@ class AtomArray(_AtomArrayFeature):
         str
     ] = None  # single chain id - means we will intepret structure as a single chain
     id: Optional[str] = None
-    drop_sidechains: bool = False
-    internal_coords_type: str = None  # foldcomp, idealised, or pnerf
     # Automatically constructed
     _type: str = field(
         default="AtomArray", init=False, repr=False
-    )  # probably requires registered feature type5
-
-    def _generate_array_dtype(self, dtype, shape):
-        # source: datasets ArrayXDExtensionType
-        dtype = string_to_arrow(dtype)
-        for _ in reversed(shape):
-            dtype = pa.list_(dtype)
-            # Don't specify the size of the list, since fixed length list arrays have issues
-            # being validated after slicing in pyarrow 0.17.1
-        return dtype
+    )  # registered feature name
 
     def __call__(self):
-        fields = [
-            pa.field(
-                "coords", self._generate_array_dtype(self.coords_dtype, (None, 3))
-            ),  # 2D array with shape (None, 3)
-            pa.field("res_name", pa.list_(pa.utf8())),  # residue name
-            pa.field("atom_name", pa.list_(pa.utf8())),  # CA, C, N, etc.
-            pa.field("chain_id", pa.list_(pa.utf8()), nullable=True),
+        # TODO: check whether features are nullable when constructed like this?
+        features = [
+            ("coords", Array2D((None, 3), self.coords_dtype)),
+            ("aa_index", Array1D("int8")),
+            ("atom_name", Array1D("string")),
+            ("chain_id", Array1D("string")),
         ]
         if self.with_res_id:
-            fields.append(pa.field("res_id", pa.list_(pa.int16())))
+            features.append(("res_id", Array1D("int16")))
         if self.with_hetero:
-            fields.append(pa.field("hetero", pa.list_(pa.bool_()), nullable=True))
+            features.append(("hetero", Array1D("bool")))
         if self.with_ins_code:
-            fields.append(pa.field("ins_code", pa.list_(pa.utf8()), nullable=True))
+            features.append(("ins_code", Array1D("string")))
         if self.with_box:
-            fields.append(
-                pa.field("box", pa.list_(pa.list_(pa.float32(), 3), 3), nullable=True)
-            )
+            features.append(("box", Array2D((3, 3), "float32")))
+        if self.with_res_id:
+            features.append(("res_id", Array1D("int16")))
+        if self.with_hetero:
+            features.append(("hetero", Array1D("bool")))
+        if self.with_ins_code:
+            features.append(("ins_code", Array1D("string")))
+        if self.with_box:
+            features.append(("box", Array2D((3, 3), "float32")))
         if self.with_bonds:
-            fields.append(
-                pa.field(
-                    "bonds",
-                    pa.list_(
-                        pa.struct(
-                            fields=[
-                                pa.field("atom1_idx", pa.int32()),
-                                pa.field("atom2_idx", pa.int32()),
-                                pa.field("bond_type", pa.int8()),
-                            ]
-                        )
-                    ),
-                    nullable=True,
-                ),
-            )
+            features.append(("bond_edges", Array2D((None, 2), "int32")))
+            features.append(("bond_types", Array1D("int8")))
         if self.with_occupancy:
-            fields.append(pa.field("occupancy", pa.list_(pa.float16()), nullable=True))
+            features.append(("occupancy", Array1D("float16")))
         if self.with_b_factor:
-            fields.append(
-                pa.field(
-                    "b_factor",
-                    pa.list_(string_to_arrow(self.bfactor_dtype)),
-                    nullable=True,
-                )
-            )
+            # TODO: maybe have specific storage format for plddt bfactor (fixed range)
+            features.append(("b_factor", Array1D(self.bfactor_dtype)))
         if self.with_charge:
-            fields.append(pa.field("charge", pa.list_(pa.int8()), nullable=True))
+            features.append(("charge", Array1D("int8")))
         if self.with_element:
-            fields.append(pa.field("element", pa.list_(pa.utf8()), nullable=True))
-        return pa.struct(fields)
-
-    def cast_storage(self, storage: pa.StructArray) -> pa.StructArray:
-        """Cast an Arrow array to the AtomArray arrow storage type.
-        Fields need to be in the same order as in AtomArrayExtensionType.
-        https://github.com/huggingface/datasets/blob/16a121d7821a7691815a966270f577e2c503473f/src/datasets/table.py#L1995
-
-        The Arrow types that can be converted to the AtomArray pyarrow storage type are:
-
-        - `pa.struct({...})`  - order doesn't matter
-
-        Args:
-            storage (`Union[pa.StringArray, pa.StructArray, pa.ListArray]`):
-                PyArrow array to cast.
-
-        Returns:
-            `pa.StructArray`: Array in the AtomArray arrow storage type.
-        """
-        if not pa.types.is_struct(storage.type):
-            raise ValueError(f"Expected struct type, got {storage.type}")
-
-        # Initialize arrays for all fields in AtomArrayExtensionType
-        fields = {}
-        for i in range(storage.type.num_fields):
-            field_name = storage.type.field(i).name
-            fields[field_name] = storage.field(field_name)
-
-        # Create a new StructArray with all the required fields
-        storage = pa.StructArray.from_arrays(
-            list(fields.values()), list(fields.keys()), mask=storage.is_null()
-        )
-
-        return array_cast(storage, self())
+            features.append(("element", Array1D("string")))
+        return get_nested_type(OrderedDict(features))
 
     @property
     def required_keys(self):
@@ -554,15 +508,11 @@ class AtomArray(_AtomArrayFeature):
             value = atom_array_from_dict(value)
             return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
-            if self.drop_sidechains:
-                value = value[filter_backbone(value)]
             atom_array_struct = {
                 "coords": value.coord,
-                "res_name": np.array(
-                    [
-                        ProteinSequence.convert_letter_3to1(res_name)
-                        for res_name in value.res_name
-                    ]
+                # TODO: consider using searchsorted for this
+                "aa_index": np.array(
+                    [AA_NAME_TO_INDEX[res_name] for res_name in value.res_name]
                 ),
                 "atom_name": value.atom_name,
             }
@@ -572,7 +522,6 @@ class AtomArray(_AtomArrayFeature):
                 atom_array_struct["chain_id"] = None
             for attr in [
                 "box",
-                "bonds",
                 "occupancy",
                 "b_factor",
                 "atom_id",
@@ -584,7 +533,11 @@ class AtomArray(_AtomArrayFeature):
             ]:
                 if getattr(self, f"with_{attr}"):
                     atom_array_struct[attr] = getattr(value, attr)
-
+            if self.with_bonds:
+                bonds_array = value.bond_list.as_array()
+                assert bonds_array.ndim == 2 and bonds_array.shape[1] == 3
+                atom_array_struct["bond_edges"] = bonds_array[:, :2]
+                atom_array_struct["bond_types"] = bonds_array[:, 2]
             return atom_array_struct
         elif isinstance(value, (str, os.PathLike)):
             if os.path.exists(value):
@@ -636,35 +589,39 @@ class AtomArray(_AtomArrayFeature):
                 f"with dtype '{self._annot[str(category)].dtype}' into '{dtype}'"
         """
         # TODO: optimise this...if we set format to numpy, everything is a numpy array which should be ideal
-        length = len(value["res_name"])
+        num_atoms = len(value["aa_index"])
         if "res_id" not in value:
-            value["res_id"] = np.arange(length)
-        arr = bs.AtomArray(length=length)
-        value["res_name"] = [
-            ProteinSequence.convert_letter_1to3(aa) for aa in value["res_name"]
-        ]
+            value["res_id"] = np.arange(num_atoms)
+        arr = bs.AtomArray(num_atoms)
+        value["res_name"] = AA_NAMES[value["aa_index"]]
         coords = np.stack(value.pop("coords"))
         arr.coord = coords
+        if "bond_edges" in value:
+            bonds_array = value.pop("bond_edges")
+            bond_types = value.pop("bond_types")
+            bonds_array = np.concatenate([bonds_array, bond_types[:, None]], axis=1)
+            bonds = bs.BondList(num_atoms, bonds_array)
+            arr.bond_list = bonds
         for key, value in value.items():
             arr.set_annotation(key, value)
         if self.chain_id is not None:
-            arr.set_annotation("chain_id", np.array([self.chain_id] * length))
+            arr.set_annotation("chain_id", np.array([self.chain_id] * num_atoms))
         return arr
 
 
 @dataclass
-class Structure(_AtomArrayFeature):
+class StructureFeature(_AtomArrayFeatureMixin):
     """Structure [`Feature`] to read (bio)molecular atomic structure data from supported file types.
     The file contents are serialized as bytes, file path and file type within an Arrow table.
     The file contents are automatically decoded to a biotite AtomArray (if mode=="array") or a
     Biopython structure (if mode=="structure") when loading data from the dataset.
 
-    This is similar to the Image feature in the HF datasets library.
+    This is similar to the Image/Audio features in the HF datasets library.
 
     - AtomArray documentation: https://www.biotite-python.org/latest/apidoc/biotite.structure.AtomArray.html#biotite.structure.AtomArray
     - Structure documentation: https://biopython.org/wiki/The_Biopython_Structural_Bioinformatics_FAQ#the-structure-object
 
-    Input: The BiomolecularStructureFile feature accepts as (encodeable) input (Q. where would 'input' typically occur):
+    Input: The StructureFeature accepts as (encodeable) input (e.g. as structure values in the outputs of dataset_builder.generate_examples()):
     - A `str`: Absolute path to the structure file (i.e. random access is allowed).
     - A `dict` with the keys:
 
@@ -687,7 +644,7 @@ class Structure(_AtomArrayFeature):
     decode: bool = True
     id: Optional[str] = None
     encode_with_foldcomp: bool = False
-    mode: str = "array"
+    decode_as: ClassVar[str] = "array"  # array, structure, protein, ...
     pa_type: ClassVar[Any] = pa.struct(
         {"bytes": pa.binary(), "path": pa.string(), "type": pa.string()}
     )
@@ -700,6 +657,7 @@ class Structure(_AtomArrayFeature):
         """Encode example into a format for Arrow.
 
         This determines what gets written to the Arrow file.
+        TODO: accept Protein as input?
         """
         file_type = infer_type_from_structure_file_dict(value)
         if isinstance(value, str):
@@ -755,9 +713,15 @@ class Structure(_AtomArrayFeature):
                 "Decoding is disabled for this feature. Please use Structure(decode=True) instead."
             )
 
-        return load_structure_from_file_dict(
+        array = load_structure_from_file_dict(
             value, token_per_repo_id=token_per_repo_id, extra_fields=self.extra_fields
         )
+        if self.decode_as == "array":
+            return array
+        elif self.decode_as == "protein":
+            return Protein(array)
+        else:
+            raise ValueError(f"Unsupported decode_as: {self.decode_as}")
 
     def cast_storage(self, storage: pa.StructArray) -> pa.StructArray:
         if pa.types.is_struct(storage.type):
@@ -777,3 +741,7 @@ class Structure(_AtomArrayFeature):
         else:
             raise ValueError(f"Unsupported storage type: {storage.type}")
         return array_cast(storage, self.pa_type)
+
+
+class ProteinStructureFeature(StructureFeature):
+    decode_as: ClassVar[str] = "protein"
