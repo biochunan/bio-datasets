@@ -1,10 +1,11 @@
 # Bio Datasets
-Bringing bio (molecules and more) to the huggingface datasets library
 
+Bringing bio (molecules and more) to the huggingface datasets library
 
 ## Features
 
-* Full integration with the HuggingFace datasets library including saving and loading datasets to HuggingFace hub, memory mapping, etc.
+* Full integration with the HuggingFace datasets library including saving and loading datasets
+  to HuggingFace hub, memory mapping, streaming of large datasets etc.
 * Built-in support for efficient storage formats for biological data (e.g. foldcomp fcz format for protein structures)
 * Automatic conversion of data between internal storage formats and convenient formats for manipulation
    and ml model development.
@@ -12,7 +13,7 @@ Bringing bio (molecules and more) to the huggingface datasets library
   biomolecular structures) into the extensible HuggingFace Datasets Feature API.
 * Ultra-fast iteration over high-dimensional arrays for both in-memory and sharded, disk-based iterable datasets,
   supported by recent improvements to the HF Datasets library.
-* Initial support for Protein data types with more data types planned
+* Initial support for Protein data types with more data types planned (and contributions towards that very welcome!)
 
 ### Supported data types
 
@@ -31,7 +32,6 @@ Hopefully these modifications will be incorporated into the HF library, in which
 the dependency.
 
 ## Usage
-
 
 ### Loading data from the Hub
 
@@ -54,15 +54,17 @@ biotite.structure.AtomArray
 ```
 
 Structure data is stored internally in either foldcomp compressed PDB format or as PDB format byte-strings.
-bio_datasets automatically handles conversion from this format to the biotite AtomArray format for downstream processing.
-Of course, converting from PDB format to biotite format involves some overhead (though it's still possible to iterate over ~100 pdb files a second.)
+bio_datasets automatically handles conversion from this format to the biotite AtomArray format
+for downstream processing.
+Of course, converting from PDB format to biotite format involves some overhead (though it's
+still possible to iterate over ~100 pdb files a second.)
 
 If you want even quicker processing, we also support storing data in a native array format that
 supports blazingly fast iteration over samples.
 
 To combine the fast iteration offered by array-based storage with foldcomp-style compression,
-we offer the option to store structure data in a discretised internal coordinate-based representation.
-
+we offer an experimental option to store structure data in a foldcomp-style discretised internal
+coordinate-based representation.
 
 ### Loading data with bio features from local files
 

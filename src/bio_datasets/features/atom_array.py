@@ -415,8 +415,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
         default="AtomArray", init=False, repr=False
     )  # registered feature name
 
-    def __call__(self):
-        # TODO: check whether features are nullable when constructed like this?
+    def _make_features_dict(self):
         features = [
             ("coords", Array2D((None, 3), self.coords_dtype)),
             ("aa_index", Array1D((None,), "int8")),
@@ -451,7 +450,13 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
             features.append(("charge", Array1D((None,), "int8")))
         if self.with_element:
             features.append(("element", Array1D((None,), "string")))
-        return get_nested_type(OrderedDict(features))
+        return OrderedDict(
+            features
+        )  # order may not be important due to Features.recursive_reorder
+
+    def __post_init__(self):
+        # init the StructFeature - since it inherits from dict, pa type inference is automatic (via get_nested_type)
+        StructFeature.__init__(self, self._make_features_dict())
 
     @property
     def required_keys(self):
