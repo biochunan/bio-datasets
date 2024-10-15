@@ -24,54 +24,18 @@ from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile
 from datasets import Array1D, Array2D, config
 from datasets.download import DownloadConfig
-from datasets.features.features import get_nested_type
+from datasets.features.features import Feature, get_nested_type
 from datasets.table import array_cast
 from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import string_to_dict
 
-from bio_datasets import Protein
 from bio_datasets import config as bio_config
-from bio_datasets import constants as bio_constants
+from bio_datasets.protein import AA_NAME_TO_INDEX, AA_NAMES, Protein
 
 from .features import StructFeature
 
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
-
-
-AA_LETTERS = [
-    "A",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "I",
-    "K",
-    "L",
-    "M",
-    "N",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "V",
-    "W",
-    "Y",
-]
-AA_NAMES = [ProteinSequence.convert_letter_1to3(aa) for aa in AA_LETTERS]
-AA_LETTER_WITH_X = AA_LETTERS + ["X"]
-AA_LETTER_WITH_X_AND_GAP = AA_LETTER_WITH_X + ["-"]
-AA_LETTER_TO_INDEX = {aa: i for i, aa in enumerate(AA_LETTERS)}
-AA_NAME_TO_INDEX = {aa: i for i, aa in enumerate(AA_NAMES)}
-AA_LETTER_TO_INDEX_WITH_X = {aa: i for i, aa in enumerate(AA_LETTER_WITH_X)}
-AA_LETTER_TO_INDEX_WITH_X_AND_GAP = {
-    aa: i for i, aa in enumerate(AA_LETTER_WITH_X_AND_GAP)
-}
-
-BACKBONE_ATOMS = ["N", "CA", "C", "O"]
 
 
 FILE_TYPE_TO_EXT = {
@@ -455,38 +419,38 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
         # TODO: check whether features are nullable when constructed like this?
         features = [
             ("coords", Array2D((None, 3), self.coords_dtype)),
-            ("aa_index", Array1D("int8")),
-            ("atom_name", Array1D("string")),
-            ("chain_id", Array1D("string")),
+            ("aa_index", Array1D((None,), "int8")),
+            ("atom_name", Array1D((None,), "string")),
+            ("chain_id", Array1D((None,), "string")),
         ]
         if self.with_res_id:
-            features.append(("res_id", Array1D("int16")))
+            features.append(("res_id", Array1D((None,), "int16")))
         if self.with_hetero:
-            features.append(("hetero", Array1D("bool")))
+            features.append(("hetero", Array1D((None,), "bool")))
         if self.with_ins_code:
-            features.append(("ins_code", Array1D("string")))
+            features.append(("ins_code", Array1D((None,), "string")))
         if self.with_box:
             features.append(("box", Array2D((3, 3), "float32")))
         if self.with_res_id:
-            features.append(("res_id", Array1D("int16")))
+            features.append(("res_id", Array1D((None,), "int16")))
         if self.with_hetero:
-            features.append(("hetero", Array1D("bool")))
+            features.append(("hetero", Array1D((None,), "bool")))
         if self.with_ins_code:
-            features.append(("ins_code", Array1D("string")))
+            features.append(("ins_code", Array1D((None,), "string")))
         if self.with_box:
             features.append(("box", Array2D((3, 3), "float32")))
         if self.with_bonds:
             features.append(("bond_edges", Array2D((None, 2), "int32")))
-            features.append(("bond_types", Array1D("int8")))
+            features.append(("bond_types", Array1D((None,), "int8")))
         if self.with_occupancy:
-            features.append(("occupancy", Array1D("float16")))
+            features.append(("occupancy", Array1D((None,), "float16")))
         if self.with_b_factor:
             # TODO: maybe have specific storage format for plddt bfactor (fixed range)
-            features.append(("b_factor", Array1D(self.bfactor_dtype)))
+            features.append(("b_factor", Array1D((None,), self.bfactor_dtype)))
         if self.with_charge:
-            features.append(("charge", Array1D("int8")))
+            features.append(("charge", Array1D((None,), "int8")))
         if self.with_element:
-            features.append(("element", Array1D("string")))
+            features.append(("element", Array1D((None,), "string")))
         return get_nested_type(OrderedDict(features))
 
     @property
@@ -610,7 +574,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, StructFeature):
 
 
 @dataclass
-class StructureFeature(_AtomArrayFeatureMixin):
+class StructureFeature(_AtomArrayFeatureMixin, Feature):
     """Structure [`Feature`] to read (bio)molecular atomic structure data from supported file types.
     The file contents are serialized as bytes, file path and file type within an Arrow table.
     The file contents are automatically decoded to a biotite AtomArray (if mode=="array") or a
@@ -743,5 +707,6 @@ class StructureFeature(_AtomArrayFeatureMixin):
         return array_cast(storage, self.pa_type)
 
 
+@dataclass
 class ProteinStructureFeature(StructureFeature):
     decode_as: ClassVar[str] = "protein"

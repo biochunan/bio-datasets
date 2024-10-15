@@ -12,12 +12,13 @@ Bringing bio (molecules and more) to the huggingface datasets library
   biomolecular structures) into the extensible HuggingFace Datasets Feature API.
 * Ultra-fast iteration over high-dimensional arrays for both in-memory and sharded, disk-based iterable datasets,
   supported by recent improvements to the HF Datasets library.
+* Initial support for Protein data types with more data types planned
 
 ### Supported data types
 
 | Feature name |   Storage format    |
 | ------------ | --------------------|
-|  AtomArray   | arrays of (cartesian or discretised internal) coordinates and annotations |
+|  AtomArray   | arrays of (cartesian or [experimental] discretised internal) coordinates and annotations |
 |  Structure   | byte string encoded file format embedded into parquet columns: PDB / compressed PDB (foldcomp fcz) |
 
 feature classes can be imported with `from bio_datasets import <feature_name>`
@@ -113,7 +114,7 @@ TODO: add docs.
 
 ## Roadmap
 
-* Support for other biological data types: DNA, single cell / omics, MD, ...
+* Support for other biological data types: protein-ligand complexes, DNA, single cell / omics, MD, ...
 
 
 ## Contributions

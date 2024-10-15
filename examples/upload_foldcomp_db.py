@@ -27,7 +27,13 @@ def examples_generator(db_file, max_examples: Optional[int] = None):
             yield example
 
 
-def main(repo_id: str, db_file: str, as_array: bool, config_name: Optional[str] = None):
+def main(
+    repo_id: str,
+    db_file: str,
+    as_array: bool,
+    config_name: Optional[str] = None,
+    max_examples: Optional[int] = None,
+):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
@@ -38,11 +44,12 @@ def main(repo_id: str, db_file: str, as_array: bool, config_name: Optional[str] 
     with tempfile.TemporaryDirectory() as temp_dir:
         ds = Dataset.from_generator(
             examples_generator,
-            gen_kwargs={"db_file": db_file},
+            gen_kwargs={"db_file": db_file, "max_examples": max_examples},
             features=features,
             cache_dir=temp_dir,
         )
-        ds.push_to_hub(repo_id, config_name=config_name)
+        print(ds.info)
+        ds.push_to_hub(repo_id, config_name=config_name or "default")
 
 
 if __name__ == "__main__":
@@ -52,6 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--foldcomp_db_path", type=str)
     parser.add_argument("--as_array", action="store_true")
     parser.add_argument("--config_name", type=str, default=None)
+    parser.add_argument("--max_examples", type=int, default=None)
     args = parser.parse_args()
     if args.foldcomp_db_name is None and args.foldcomp_db_path is None:
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
@@ -63,5 +71,9 @@ if __name__ == "__main__":
             print("Ignoring foldcomp setup error: ", e)
         args.foldcomp_db_path = args.foldcomp_db_name
     main(
-        args.repo_id, args.foldcomp_db_path, args.as_array, config_name=args.config_name
+        args.repo_id,
+        args.foldcomp_db_path,
+        args.as_array,
+        config_name=args.config_name,
+        max_examples=args.max_examples,
     )
