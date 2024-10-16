@@ -12,7 +12,7 @@ We aim to do these three things and *no more*, leaving you to get on with the sc
 
 ## Efficient conversion between storage and usage formats
 
-The best format for storing data is typically not the most convenient format for data to be loaded into for downstream applications. The Datasets library abstracts these choices into Feature classes, dictating how data of particular types should be stored and loaded. We extend the Datasets library by creating Feature types for optimised storage and loading of biological data, starting with proteins.
+The best format for storing data is typically not the most convenient format for data to be loaded into for downstream applications. The Datasets library abstracts the details of these choices and the logic for converting between formats into Feature classes, dictating how data of particular types should be stored and loaded. We extend the Datasets library by creating Feature types for optimised storage and loading of biological data, starting with proteins.
 
 The main formats we support for storing and loading protein data are:
 
@@ -21,6 +21,7 @@ The main formats we support for storing and loading protein data are:
 | ------------ | --------------------| ------------|
 |  AtomArrayFeature / ProteinAtomArrayFeature  | arrays of cartesian or (*experimental*) discretised internal coordinates and annotations | `biotite.structure.AtomArray` / `bio_datasets.Protein` (lightweight wrapper around `biotite.structure.AtomArray`)|
 |  StructureFeature / ProteinStructureFeature   | byte string encoded file format embedded into parquet columns: PDB / compressed PDB (gzip / foldcomp fcz) | `biotite.sturcture.AtomArray` / `bio_datasets.Protein` |
+
 
 ## Installation
 
@@ -33,7 +34,11 @@ pip install .
 
 ### Loading data from the Hub
 
-We provide examples of datasets pre-configured with Bio Datasets Features thaft can be downloaded from the hub.
+In the Datasets library, datasets are associated with metadata annotations describing the feature types present in the dataset, and how those feature types should be stored and loaded.
+
+This makes it easy to share datasets in efficient storage formats, while allowing people who download the dataset to directly access the data in a convenient format for downstream use.
+
+To illustrate, we provide examples of datasets pre-configured with Bio Datasets Feature types that can be downloaded from the hub.
 
 ```python
 import bio_datasets  # necessary to register the custom feature types with the datasets library
@@ -64,13 +69,22 @@ print(dataset.info.features)
 
 To summarise: this dataset contains two features: 'name', which is a string, and 'structure' which is a `bio_datasets.ProteinStructureFeature`. Features of this type will automatically be loaded as `bio_datasets.Protein` instances.
 
-### Building and sharing datasets from local files
+### Creating a dataset with bio feature types
 
-To use the built-in Feature types provided by bio-datasets, simply create a Features object
-from a dictionary mapping column names to feature types.
 
-Each Feature type supports various configuration options (see details in \__init__ methods)
-controlling the formats in which data is stored and loaded.
+#### Building and sharing datasets from local files
+
+To streamline the processes of building your own datasets from local files, we provide some utility classes for building datasets from standard formats. For example suppose you have a local directory containing PDB files. You want to write an efficient data loader, and ideally to reduce the size of the directory to make it easier to share with your collaborators. bio-datasets allows you to achieve these two things with almost no effort.
+
+#### Fully-flexible dataset construction
+
+If your local data doesn't fit the format assumed by ProteinStructureFolder, but you still want a way to create a Dataset instance (for example to convert your local data into a more efficient storage format for sharing, or to exploit Dataset's fast memory-mapped retrieval), you simply need to configure a Dataset constructor with information on your Feature types:
+
+This feature configuration is performed by creating a `datasets.Features` object mapping column names to feature types.
+
+Each Feature type supports various configuration options (see details in \__init__ methods) controlling the formats in which data is stored and loaded.
+
+For example, using a [generator-based Dataset constructor]():
 
 ```python
 from datasets import Dataset, Features
@@ -91,12 +105,12 @@ ds[0]
 # share your bio dataset to the HuggingFace hub!
 ds.push_to_hub(HUB_REPO_ID)
 ```
-There are a couple of other ways of converting local files into Bio feature types:
-use cast_column (https://huggingface.co/docs/datasets/image_load#local-files) or use a folder-based dataset builder
 
-#TODO: show equivalent usage of PDBFolderBasedBuilder
+The `examples_generator` function yields single datapoints in unprocessed formats compatible with the corresponding feature:
 
-### Choosing Feature type for optimal performance: a trade off between efficiency of storage and loading
+In this case the unprocessed data for the 'structure' column is passed as a python dictionary containing a single key 'path' whose value is the path to a PDB file. Refer to the documentation of individual Feature types for more information on supported input formats. (Under the hood these will be encoded via feature.encode_example).
+
+### Performance tips: choose Feature types to trade off between efficiency of storage and loading
 
 `bio_datasets.StructureFeature` feature data is stored internally
 or as PDB format byte-strings (optionally compressed with foldcomp or gzip). bio_datasets automatically handles conversion from this format to the
@@ -107,6 +121,8 @@ using [fastpdb](https://github.com/biotite-dev/fastpdb) if you have it installed
 
 If you want even faster processing, we also support storing data in a native array format
 that supports blazingly fast iteration over fully featurised samples. Let's convert the `bio_datasets.StructureFeature` data to the `bio_datasets.AtomArrayFeature` type, and compare iteration speed:
+
+(https://huggingface.co/docs/datasets/image_load#local-files)
 
 ```python
 import timeit
