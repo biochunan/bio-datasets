@@ -488,6 +488,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         )
 
     def encode_example(self, value: Union[bs.AtomArray, dict]) -> dict:
+        if isinstance(value, Protein):
+            value = value.atoms
         if isinstance(value, dict):
             if "bytes" in value or "path" in value or "type" in value:
                 # if it's already encoded, we don't need to encode it again
@@ -599,6 +601,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 f"Cannot cast '{str(category)}' "
                 f"with dtype '{self._annot[str(category)].dtype}' into '{dtype}'"
         """
+        # TODO: null check
         # TODO: optimise this...if we set format to numpy, everything is a numpy array which should be ideal
         num_atoms = len(value["atom_name"])
         is_start_mask = np.zeros(num_atoms, dtype=bool)
@@ -665,7 +668,6 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
     decode: bool = True
     id: Optional[str] = None
     encode_with_foldcomp: bool = False
-    decode_as: ClassVar[str] = "array"  # array, structure, protein, ...
     pa_type: ClassVar[Any] = pa.struct(
         {"bytes": pa.binary(), "path": pa.string(), "type": pa.string()}
     )
@@ -737,12 +739,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         array = load_structure_from_file_dict(
             value, token_per_repo_id=token_per_repo_id, extra_fields=self.extra_fields
         )
-        if self.decode_as == "array":
-            return array
-        elif self.decode_as == "protein":
-            return Protein(array)
-        else:
-            raise ValueError(f"Unsupported decode_as: {self.decode_as}")
+        return array
 
     def cast_storage(self, storage: pa.StructArray) -> pa.StructArray:
         if pa.types.is_struct(storage.type):
@@ -807,7 +804,6 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
 
 @dataclass
 class ProteinStructureFeature(StructureFeature):
-    decode_as: ClassVar[str] = "protein"
     _type: str = field(default="ProteinStructure", init=False, repr=False)
 
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":

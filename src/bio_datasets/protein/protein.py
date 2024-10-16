@@ -199,7 +199,8 @@ class Protein:
         oxt_mask = (atoms.atom_name == "OXT") & final_residue_in_chain
         if np.any(oxt_mask):
             expected_relative_atom_indices[oxt_mask] = (
-                ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[atoms.aa_index[oxt_mask]].max() + 1
+                ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[atoms.aa_index[oxt_mask]].max()
+                + 1
             )
         unexpected_atom_mask = expected_relative_atom_indices == -100
         if np.any(unexpected_atom_mask):

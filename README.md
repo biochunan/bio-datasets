@@ -69,6 +69,13 @@ print(dataset.info.features)
 
 To summarise: this dataset contains two features: 'name', which is a string, and 'structure' which is a `bio_datasets.ProteinStructureFeature`. Features of this type will automatically be loaded as `bio_datasets.Protein` instances.
 
+We can also inspect the raw data format used for storage by discarding the feature information:
+
+```python
+dataset.info.features = None
+dataset[0]["structure"]  # a foldcomp byte string
+```
+
 ### Creating a dataset with bio feature types
 
 
@@ -120,30 +127,30 @@ still possible to iterate over ~100 pdb files a second; and we'll automatically 
 using [fastpdb](https://github.com/biotite-dev/fastpdb) if you have it installed)
 
 If you want even faster processing, we also support storing data in a native array format
-that supports blazingly fast iteration over fully featurised samples. Let's convert the `bio_datasets.StructureFeature` data to the `bio_datasets.AtomArrayFeature` type, and compare iteration speed:
+that supports blazingly fast iteration over fully featurised samples.
+Let's convert the `bio_datasets.StructureFeature` data to the `bio_datasets.AtomArrayFeature` type, and compare iteration speed:
 
-(https://huggingface.co/docs/datasets/image_load#local-files)
 
 ```python
-import timeit
-import bio_datasets  # necessary to register the custom feature types with the datasets library
-from datasets import load_dataset
+from datasets import Features, Value
+from bio_datasets import AtomArrayFeature
+pdb_time = timeit.timeit(stmt="""[ex for ex in dataset]""", number=1, globals=globals())
+def convert_structure_to_array(ex, features):
+    return features.encode_example(ex)
 
-dataset = load_dataset(
-    "graph-transformers/afdb_e_coli",
-    split="train",
-    name="array"
-)
-size_gb = dataset.dataset_size/(1024**3)
-time = timeit.timeit(stmt="""[ex for ex in dataset]""", number=1, globals=globals())
+new_features = Features(name=Value("string"), structure=AtomArrayFeature())
+array_dataset = dataset.map(convert_structure_to_array, features=new_features, fn_kwargs={"features": new_features})
+array_time = timeit.timeit(stmt="""[ex for ex in array_dataset]""", number=1, globals=globals())
+
 print(
-  f"Iterated over {len(dataset)} examples (about {size_gb:.2f}GB) in "
-  f"{time:.1f}s, i.e. {len(dataset)/time:.1f} samples/s"
+  f"Iterated over {len(dataset)} examples in "
+  f"{pdb_time:.1f}s with PDB storage vs {array_time:.1f}s with array storage\n"
+  f" i.e. {len(dataset)/pdb_time:.1f} samples/s vs {len(dataset)/array_time:.1f} samples/s"
 )
 ```
 ```
-# ~ 3.5x faster than using foldcomp + fastpdb (the first version, assuming fastpdb installed)
-Iterated over 8726 examples (about 0.55GB) in 8.1s, i.e. 1077.3 samples/s
+Iterated over 8726 examples in 47.5s with PDB storage vs 7.0s with array storage
+ i.e. 183.6 samples/s vs 1237.8 samples/s
 ```
 
 All of the Datasets library's methods for faster loading, including batching and
