@@ -780,7 +780,7 @@ class ProteinStructureFeature(StructureFeature):
 
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
         atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
-        return Protein(filter_amino_acids(atoms))
+        return Protein(atoms[filter_amino_acids(atoms)])
 
 
 @dataclass
@@ -794,7 +794,7 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
 
     def encode_example(self, value: Union[Protein, dict, bs.AtomArray]) -> dict:
         if isinstance(value, bs.AtomArray):
-            return super().encode_example(filter_amino_acids(value))
+            return super().encode_example(value[filter_amino_acids(value)])
         if isinstance(value, Protein):
             return self.encode_example(value.backbone().atoms)
         if self.drop_sidechains:
@@ -804,4 +804,4 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
 
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
         atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
-        return Protein(filter_amino_acids(atoms))
+        return Protein(atoms[filter_amino_acids(atoms)])

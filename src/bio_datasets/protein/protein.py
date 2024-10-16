@@ -14,7 +14,13 @@ from biotite.structure.residues import get_residue_starts
 
 from bio_datasets.np_utils import map_categories_to_indices
 
-from .constants import RESTYPE_ATOM37_TO_ATOM14, atom_types, residue_atoms, resnames
+from .constants import (
+    RESTYPE_ATOM37_TO_ATOM14,
+    atom_types,
+    residue_atoms_ordered,
+    resnames,
+    restype_name_to_atom14_names,
+)
 
 BACKBONE_ATOMS = ["N", "CA", "C", "O"]
 
@@ -29,7 +35,7 @@ def get_residue_starts_mask(
     return mask
 
 
-def get_relative_atom_indices_mapping(atom_names: List[str]) -> np.ndarray:
+def get_relative_atom_indices_mapping() -> np.ndarray:
     """
     Get a mapping from atom37 index to expected index for a given residue.
     """
@@ -38,19 +44,25 @@ def get_relative_atom_indices_mapping(atom_names: List[str]) -> np.ndarray:
         if resname == "UNK":
             residue_atom_list = ["N", "CA", "C", "O"]
         else:
-            residue_atom_list = residue_atoms[resname]
+            residue_atom_list = residue_atoms_ordered[resname]
         atom_indices_mapping = []
         for atom in atom_types:
             if atom in residue_atom_list:
-                atom_indices_mapping[resname, atom] = residue_atom_list.index(atom)
+                relative_index = residue_atom_list.index(atom)
+                atom_indices_mapping.append(relative_index)
             else:
-                atom_indices_mapping[resname, atom] = -100
+                atom_indices_mapping.append(-100)
         all_atom_indices_mapping.append(np.array(atom_indices_mapping))
     return np.stack(all_atom_indices_mapping, axis=0)
 
 
-RELATIVE_ATOM_INDICES_MAPPING = get_relative_atom_indices_mapping(atom_types)
-RESIDUE_SIZES = np.array([len(residue_atoms[resname]) for resname in resnames])
+ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING = get_relative_atom_indices_mapping()  # (21, 37)
+STANDARD_ATOMS_BY_RESIDUE = np.asarray(
+    [restype_name_to_atom14_names[resname] for resname in resnames]
+)  # (21, 14) indexable atom name strings
+RESIDUE_SIZES = np.array(
+    [len(residue_atoms_ordered[resname]) for resname in resnames[:-1]] + [4]
+)  # bb only for UNK
 
 
 def get_aa_index(res_name: np.ndarray) -> np.ndarray:
@@ -85,6 +97,18 @@ def filter_backbone(array):
     return filter_atom_names(array, BACKBONE_ATOMS) & filter_amino_acids(array)
 
 
+def set_annotation_at_masked_atoms(
+    atoms: bs.AtomArray, annot_name: str, new_annot: np.ndarray
+):
+    assert "mask" in atoms._annot
+    atoms.add_annotation(annot_name, dtype=new_annot.dtype)
+    if len(new_annot) != len(atoms):
+        assert len(new_annot) == np.sum(atoms.mask)
+        getattr(atoms, annot_name)[atoms.mask] = new_annot
+    else:
+        getattr(atoms, annot_name)[atoms.mask] = new_annot[atoms.mask]
+
+
 # TODO: add support for batched application of these functions (i.e. to multiple proteins at once)
 class Protein:
 
@@ -92,11 +116,15 @@ class Protein:
 
     N.B. whereas the atom array exposes atom level annotations,
     this class exposes residue level annotations.
+
+    TODO: add option to disable standardisation
+    TODO: add option to fill missing residues (especially useful for cif files)
     """
 
     def __init__(
         self,
         atoms: bs.AtomArray,
+        verbose: bool = False,
     ):
         """
         Parameters
@@ -104,18 +132,119 @@ class Protein:
         atoms : AtomArray
             The atoms of the protein.
         """
+        atoms = atoms[filter_amino_acids(atoms)]
+        assert np.unique(atoms.chain_id).size == 1, "Only a single chain is supported"
+        self._residue_starts = get_residue_starts(atoms)
         self._set_atom_annotations(atoms)
-        self.atoms, self._residue_starts = self._standardise_atoms(atoms)
+        self.atoms, self._residue_starts = self._standardise_atoms(
+            atoms, verbose=verbose
+        )
+        self._standardised = True
 
     def _set_atom_annotations(self, atoms):
-        residue_starts = get_residue_starts(atoms)
+        # convert selenium to sulphur
+        mse_selenium_mask = (atoms.res_name == "MSE") & (atoms.atom_name == "SE")
+        sec_selenium_mask = (atoms.res_name == "SEC") & (atoms.atom_name == "SE")
+        atoms.atom_name[mse_selenium_mask] = "SD"
+        atoms.atom_name[sec_selenium_mask] = "SG"
+        atoms.res_name[atoms.res_name == "MSE"] = "MET"
+        atoms.res_name[atoms.res_name == "SEC"] = "CYS"
+
         atoms.set_annotation(
             "atom37_index", map_categories_to_indices(atoms.atom_name, atom_types)
         )
         atoms.set_annotation("aa_index", get_aa_index(atoms.res_name))
         atoms.set_annotation(
-            "residue_index", np.cumsum(get_residue_starts_mask(atoms, residue_starts))
+            "residue_index",
+            np.cumsum(get_residue_starts_mask(atoms, self._residue_starts)) - 1,
         )
+
+    def _standardise_atoms(self, atoms, verbose: bool = False):
+        """We want all atoms to be present, with nan coords if any are missing.
+
+        We also want to ensure that atoms are in the correct order.
+
+        We can do this in a vectorised way by calculating the expected index of each atom,
+        created a new atom array with number of atoms equal to the expected number of atoms,
+        and then filling in the present atoms in the new array according to the expected index.
+
+        This validation ensures that methods like `backbone_positions`,`to_atom14`, and `to_atom37` can be applied safely downstream.
+        """
+        # first we get an array of atom indices for each residue (i.e. a mapping from atom37 index to expected index
+        # then we index into this array to get the expected index for each atom
+        expected_relative_atom_indices = ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[
+            atoms.aa_index, atoms.atom37_index
+        ]
+        if np.any(expected_relative_atom_indices == -100):
+            raise ValueError(
+                "At least one unexpected atom detected in a residue. HETATMs are not supported."
+            )
+
+        # we need to add these indices to expected residue starts
+        expected_residue_sizes = RESIDUE_SIZES[
+            atoms.aa_index[self._residue_starts]
+        ]  # (n_residues,) NOT (n_atoms,)
+        expected_residue_starts = np.concatenate(
+            [[0], np.cumsum(expected_residue_sizes)[:-1]]
+        )  # (n_residues,)
+        expected_atom_indices = (
+            expected_residue_starts[atoms.residue_index]
+            + expected_relative_atom_indices
+        ).astype(int)
+
+        new_atom_array = bs.AtomArray(length=np.sum(expected_residue_sizes))
+        for annot_name, annot in atoms._annot.items():
+            if annot_name in ["atom37_index", "aa_index", "residue_index", "mask"]:
+                continue
+            getattr(new_atom_array, annot_name)[expected_atom_indices] = annot
+
+        # set_annotation vs setattr: set_annotation adds to annot and verifies size
+        new_atom_array.coord[expected_atom_indices] = atoms.coord
+        new_atom_array.set_annotation(
+            "residue_index",
+            np.cumsum(get_residue_starts_mask(new_atom_array, expected_residue_starts))
+            - 1,
+        )
+        # if we can create a res start index for each atom, we can assign the value based on that...
+        assert len(expected_residue_starts) == len(self._residue_starts)
+        atomwise_residue_starts = self._residue_starts[new_atom_array.residue_index]
+        new_atom_array.set_annotation(
+            "res_name", atoms.res_name[atomwise_residue_starts]
+        )
+        new_atom_array.set_annotation("res_id", atoms.res_id[atomwise_residue_starts])
+        new_atom_array.set_annotation(
+            "aa_index", atoms.aa_index[atomwise_residue_starts]
+        )
+        relative_atom_index = (
+            np.arange(len(new_atom_array))
+            - expected_residue_starts[new_atom_array.residue_index]
+        )
+        new_atom_array.set_annotation(
+            "atom_name",
+            STANDARD_ATOMS_BY_RESIDUE[new_atom_array.aa_index, relative_atom_index],
+        )
+        new_atom_array.set_annotation(
+            "atom37_index",
+            map_categories_to_indices(new_atom_array.atom_name, atom_types),
+        )
+        assert np.all(
+            new_atom_array.atom_name != ""
+        ), "All atoms must be assigned a name"
+        new_atom_array.chain_id[:] = atoms.chain_id[0]
+        mask = np.zeros(len(new_atom_array), dtype=bool)
+        mask[expected_atom_indices] = True
+        missing_atoms_strings = [
+            f"{res_name} {res_id} {atom_name}"
+            for res_name, res_id, atom_name in zip(
+                new_atom_array.res_name[~mask],
+                new_atom_array.res_id[~mask],
+                new_atom_array.atom_name[~mask],
+            )
+        ]
+        if verbose:
+            print("Filled in missing atoms:\n", "\n".join(missing_atoms_strings))
+        new_atom_array.set_annotation("mask", mask)
+        return new_atom_array, expected_residue_starts
 
     @property
     def chain_id(self):
@@ -138,6 +267,9 @@ class Protein:
 
     @property
     def backbone_mask(self):
+        assert (
+            self._standardised
+        ), "Atoms must be standardised before calculating backbone mask"
         # assumes standardised atoms
         residue_start_mask = np.zeros(len(self.atoms), dtype=bool)
         residue_start_mask[self._residue_starts] = True
@@ -150,60 +282,43 @@ class Protein:
         else:
             return Protein(self.atoms[key])
 
-    def _standardise_atoms(self):
-        """We want all atoms to be present, with nan coords if any are missing.
-
-        We also want to ensure that atoms are in the correct order.
-
-        We can do this in a vectorised way by calculating the expected index of each atom,
-        created a new atom array with number of atoms equal to the expected number of atoms,
-        and then filling in the present atoms in the new array according to the expected index.
-
-        This validation ensures that methods like `backbone_positions`,`to_atom14`, and `to_atom37` can be applied safely downstream.
-        """
-        import time
-
-        t0 = time.time()
-        # first we get an array of atom indices for each residue (i.e. a mapping from atom37 index to expected index
-        # then we index into this array to get the expected index for each atom
-        expected_relative_atom_indices = RELATIVE_ATOM_INDICES_MAPPING[
-            self.atoms.residue_index, self.atoms.atom37_index
+    def beta_carbon_coords(self) -> np.ndarray:
+        has_beta_carbon = self.atoms.res_name != "GLY"
+        beta_carbon_coords = np.zeros((self.num_residues, 3), dtype=np.float32)
+        beta_carbon_coords[has_beta_carbon[self._residue_starts]] = self.atoms.coord[
+            self._residue_starts[has_beta_carbon] + 4
         ]
-        if np.any(expected_relative_atom_indices == -100):
-            raise ValueError(
-                "At least one unexpected atom detected in a residue. HETATMs are not supported."
-            )
+        beta_carbon_coords[~has_beta_carbon[self._residue_starts]] = self.atoms.coord[
+            self._residue_starts[~has_beta_carbon] + 1
+        ]  # ca for gly
+        return beta_carbon_coords
 
-        # we need to add these indices to expected residue starts
-        residue_sizes = RESIDUE_SIZES[
-            self.residue_index
-        ]  # (n_residues,) NOT (n_atoms,)
-        residue_starts = np.concatenate(
-            [0, np.cumsum(residue_sizes)[:-1]]
-        )  # (n_residues,)
-        expected_atom_indices = (
-            residue_starts[self.atoms.residue_index] + expected_relative_atom_indices
+    def backbone_coords(self, atom_names: Optional[List[str]] = None) -> np.ndarray:
+        assert all(
+            [atom in BACKBONE_ATOMS + ["CB"] for atom in atom_names]
+        ), "Invalid atom names"
+        backbone_coords = self.atoms.coord[self.backbone_mask].reshape(
+            -1, len(BACKBONE_ATOMS), 3
         )
-
-        new_atom_array = bs.AtomArray(length=np.sum(residue_sizes))
-        for annot_name, annot in self.atoms.annotations.items():
-            new_annot = np.full(len(new_atom_array), np.nan)
-            new_annot[expected_atom_indices] = annot
-            new_atom_array.set_annotation(annot_name, new_annot)
-        return new_atom_array, residue_starts
-
-    def atom_coords(self, atom_names: Union[str, List[str]]) -> np.ndarray:
-        if isinstance(atom_names, str):
-            return self.atoms.coord[filter_atom_names(self.atoms, [atom_names])]
+        if atom_names is None:
+            return backbone_coords
         else:
-            atom_positions = []
-            for atom_name in atom_names:
-                atom_mask = filter_atom_names(self.atoms, [atom_name])
-                atom_positions.append(self.atoms.coord[atom_mask])
-            return np.stack(atom_positions, axis=1)  # n, num_atoms, 3
-
-    def backbone_coords(self) -> np.ndarray:
-        return self.atoms.coord[self.backbone_mask].reshape(-1, len(BACKBONE_ATOMS), 3)
+            backbone_atom_indices = [
+                BACKBONE_ATOMS.index(atom) for atom in atom_names if atom != "CB"
+            ]
+            selected_coords = np.zeros(
+                (len(backbone_coords), len(atom_names), 3), dtype=np.float32
+            )
+            selected_backbone_indices = [
+                atom_names.index(atom) for atom in atom_names if atom != "CB"
+            ]
+            selected_coords[:, selected_backbone_indices] = backbone_coords[
+                :, backbone_atom_indices
+            ]
+            if "CB" in atom_names:
+                cb_index = atom_names.index("CB")
+                selected_coords[:, cb_index] = self.beta_carbon_coords()
+            return selected_coords
 
     def backbone(self) -> "Protein":
         return Protein(self.atoms[self.backbone_mask])

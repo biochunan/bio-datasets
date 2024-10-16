@@ -398,6 +398,48 @@ residue_atoms = {
     "VAL": ["C", "CA", "CB", "CG1", "CG2", "N", "O"],
 }
 
+# Reordered atoms in standard order
+residue_atoms_ordered = {
+    "ALA": ["N", "CA", "C", "O", "CB"],
+    "ARG": ["N", "CA", "C", "O", "CB", "CG", "CD", "NE", "CZ", "NH1", "NH2"],
+    "ASP": ["N", "CA", "C", "O", "CB", "CG", "OD1", "OD2"],
+    "ASN": ["N", "CA", "C", "O", "CB", "CG", "OD1", "ND2"],
+    "CYS": ["N", "CA", "C", "O", "CB", "SG"],
+    "SEC": ["N", "CA", "C", "O", "CB", "SE"],  # Selenocysteine (added)
+    "GLU": ["N", "CA", "C", "O", "CB", "CG", "CD", "OE1", "OE2"],
+    "GLN": ["N", "CA", "C", "O", "CB", "CG", "CD", "OE1", "NE2"],
+    "GLY": ["N", "CA", "C", "O"],
+    "HIS": ["N", "CA", "C", "O", "CB", "CG", "ND1", "CE1", "NE2", "CD2"],
+    "ILE": ["N", "CA", "C", "O", "CB", "CG1", "CG2", "CD1"],
+    "LEU": ["N", "CA", "C", "O", "CB", "CG", "CD1", "CD2"],
+    "LYS": ["N", "CA", "C", "O", "CB", "CG", "CD", "CE", "NZ"],
+    "MET": ["N", "CA", "C", "O", "CB", "CG", "SD", "CE"],
+    "MSE": ["N", "CA", "C", "O", "CB", "CG", "SE", "CE"],  # Selenomethionine (added)
+    "PHE": ["N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ"],
+    "PRO": ["N", "CA", "C", "O", "CB", "CG", "CD"],
+    "SER": ["N", "CA", "C", "O", "CB", "OG"],
+    "THR": ["N", "CA", "C", "O", "CB", "OG1", "CG2"],
+    "TRP": [
+        "N",
+        "CA",
+        "C",
+        "O",
+        "CB",
+        "CG",
+        "CD1",
+        "NE1",
+        "CE2",
+        "CD2",
+        "CE3",
+        "CZ2",
+        "CZ3",
+        "CH2",
+    ],
+    "TYR": ["N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"],
+    "VAL": ["N", "CA", "C", "O", "CB", "CG1", "CG2"],
+}
+
+
 # Naming swaps for ambiguous atom names.
 # Due to symmetries in the amino acids the naming of atoms is ambiguous in
 # 4 of the 20 amino acids.
@@ -891,17 +933,17 @@ def chi_angle_atom(atom_index: int) -> np.ndarray:
 chi_atom_1_one_hot = chi_angle_atom(1)
 chi_atom_2_one_hot = chi_angle_atom(2)
 
-# An array like chi_angles_atoms but using indices rather than names.
-chi_angles_atom_indices = [chi_angles_atoms[restype_1to3[r]] for r in restypes]
-chi_angles_atom_indices = tree.map_structure(
-    lambda atom_name: atom_order[atom_name], chi_angles_atom_indices
-)
-chi_angles_atom_indices = np.array(
-    [
-        chi_atoms + ([[0, 0, 0, 0]] * (4 - len(chi_atoms)))
-        for chi_atoms in chi_angles_atom_indices
-    ]
-)
+# # An array like chi_angles_atoms but using indices rather than names.
+# chi_angles_atom_indices = [chi_angles_atoms[restype_1to3[r]] for r in restypes]
+# chi_angles_atom_indices = tree.map_structure(
+#     lambda atom_name: atom_order[atom_name], chi_angles_atom_indices
+# )
+# chi_angles_atom_indices = np.array(
+#     [
+#         chi_atoms + ([[0, 0, 0, 0]] * (4 - len(chi_atoms)))
+#         for chi_atoms in chi_angles_atom_indices
+#     ]
+# )
 
 # Mapping from (res_name, atom_name) pairs to the atom's chi group index
 # and atom index within that group.
