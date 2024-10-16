@@ -314,6 +314,7 @@ class _AtomArrayFeatureMixin:
     with_element: bool = False
     with_ins_code: bool = False
     with_hetero: bool = False
+    all_atoms_present: bool = False
 
     @property
     def extra_fields(self):
@@ -425,14 +426,31 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         default="AtomArray", init=False, repr=False
     )  # registered feature name
 
+    @classmethod
+    def from_preset(cls, preset: str):
+        if preset == "afdb":
+            return cls(
+                with_b_factor=True,
+                b_factor_is_plddt=True,
+                # b_factor_dtype="uint8"
+                b_factor_dtype="float16",
+                coords_dtype="float16",
+                all_atoms_present=True,
+            )
+        elif preset == "pdb":
+            return cls(with_b_factor=False, coords_dtype="float16")
+        else:
+            raise ValueError(f"Unknown preset: {preset}")
+
     def _make_features_dict(self):
         features = [
             ("coords", Array2D((None, 3), self.coords_dtype)),
             ("aa_index", Array1D((None,), "uint8")),
-            ("atom_name", Array1D((None,), "string")),
             ("chain_id", Array1D((None,), "string")),
-            ("residue_starts", Array1D((None,), "uint16")),
         ]
+        if not self.all_atoms_present:
+            features.append(("atom_name", Array1D((None,), "string")))
+            features.append(("residue_starts", Array1D((None,), "uint16")))
         if self.with_res_id:
             features.append(("res_id", Array1D((None,), "uint16")))
         if self.with_hetero:
@@ -514,7 +532,6 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 )
             atom_array_struct = {
                 "coords": value.coord,
-                "residue_starts": residue_starts,
                 "aa_index": np.array(
                     [
                         protein_constants.restype_order_with_x[
@@ -523,8 +540,10 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                         for res_name in value.res_name[residue_starts]
                     ]
                 ),
-                "atom_name": value.atom_name,
             }
+            if not self.all_atoms_present:
+                atom_array_struct["residue_starts"] = residue_starts
+                atom_array_struct["atom_name"] = value.atom_name[residue_starts]
             if self.chain_id is None:
                 atom_array_struct["chain_id"] = value.chain_id[residue_starts]
             else:

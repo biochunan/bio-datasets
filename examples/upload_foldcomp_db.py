@@ -3,6 +3,28 @@ Upload a foldcomp database to the hub.
 
 # TODO: rewrite with foldcompdb?
 
+storage requirements for backbone coordinates:
+coords are 4 x 3 x 2 bytes (float16) = 24 bytes per residue
+bfactor is 2 bytes per residue
+residue starts are 2 bytes per residue
+sequence is 1 byte per residue
+atom name is ~ 4 bytes per residue
+
+so we can save a load of bytes by not storing the atom names
+or residue starts for AF - since they can be inferred from the sequence
+
+so total storage we really need is
+
+12/24 bytes for backbone coords (discretised/float16)
+1? byte for side chain coords
+1? byte for bfactors (discretised)
+1 byte for sequence
+
+i.e. 15/27 bytes per residue in total; foldcomp appears to store ~16!
+
+For non-AF models, saving atom names is fine; we could infer residue starts
+from atom names but we might as well just save them too.
+
 c.f.https://github.com/huggingface/datasets/tree/main/templates
 """
 import argparse
@@ -43,6 +65,7 @@ def main(
         "with_b_factor": True,
         "b_factor_is_plddt": True,
         "b_factor_dtype": "float16",
+        "chain_id": "A",
     }
     features = Features(
         name=Value("string"),
