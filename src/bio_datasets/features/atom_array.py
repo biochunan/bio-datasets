@@ -605,7 +605,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         is_start_mask[value.pop("residue_starts")] = True
         residue_index = np.cumsum(is_start_mask) - 1
         if "res_id" not in value:
-            value["res_id"] = residue_index
+            value["res_id"] = residue_index + 1  # 1-based residue ids
         # residue-level annotations -> atom-level annotations
         value["aa_index"] = value["aa_index"][residue_index]
         if "chain_id" in value:
