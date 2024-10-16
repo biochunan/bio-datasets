@@ -20,6 +20,7 @@ from .constants import (
     residue_atoms_ordered,
     resnames,
     restype_name_to_atom14_names,
+    restypes,
 )
 
 BACKBONE_ATOMS = ["N", "CA", "C", "O"]
@@ -54,6 +55,10 @@ def get_relative_atom_indices_mapping() -> np.ndarray:
                 atom_indices_mapping.append(-100)
         all_atom_indices_mapping.append(np.array(atom_indices_mapping))
     return np.stack(all_atom_indices_mapping, axis=0)
+
+
+def decode_aa_index(aa_index: np.ndarray) -> np.ndarray:
+    return "".join(np.array(restypes)[aa_index])
 
 
 ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING = get_relative_atom_indices_mapping()  # (21, 37)

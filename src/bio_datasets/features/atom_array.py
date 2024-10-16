@@ -23,6 +23,7 @@ from biotite.structure import get_chains
 from biotite.structure.filter import filter_amino_acids
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile
+from biotite.structure.residues import get_residue_starts
 from datasets import Array1D, Array2D, config
 from datasets.download import DownloadConfig
 from datasets.features.features import Feature, get_nested_type
@@ -331,7 +332,12 @@ class _AtomArrayFeatureMixin:
 
 @dataclass
 class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
-    """AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
+    """
+    TODO: we shouldn't store residue level annotations at the atom level: instead we should
+    store residue starts and then store residue-level annotations separately. If we are dealing
+    with AFDB structures, then plddt is a residue-level annotation.
+
+    AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
     This feature stores the array directly as a pa struct (basically a dictionary of arrays),
     as defined in the AtomArrayExtensionType.
@@ -412,6 +418,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     requires_decoding: bool = True
     decode: bool = True
     coords_dtype: str = "float32"
+    bfactor_is_plddt: bool = False
     bfactor_dtype: str = "float32"
     chain_id: Optional[
         str
@@ -425,12 +432,13 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     def _make_features_dict(self):
         features = [
             ("coords", Array2D((None, 3), self.coords_dtype)),
-            ("aa_index", Array1D((None,), "int8")),
+            ("aa_index", Array1D((None,), "uint8")),
             ("atom_name", Array1D((None,), "string")),
             ("chain_id", Array1D((None,), "string")),
+            ("residue_starts", Array1D((None,), "uint16")),
         ]
         if self.with_res_id:
-            features.append(("res_id", Array1D((None,), "int16")))
+            features.append(("res_id", Array1D((None,), "uint16")))
         if self.with_hetero:
             features.append(("hetero", Array1D((None,), "bool")))
         if self.with_ins_code:
@@ -438,8 +446,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         if self.with_box:
             features.append(("box", Array2D((3, 3), "float32")))
         if self.with_bonds:
-            features.append(("bond_edges", Array2D((None, 2), "int32")))
-            features.append(("bond_types", Array1D((None,), "int8")))
+            features.append(("bond_edges", Array2D((None, 2), "uint16")))
+            features.append(("bond_types", Array1D((None,), "uint8")))
         if self.with_occupancy:
             features.append(("occupancy", Array1D((None,), "float16")))
         if self.with_b_factor:
@@ -491,23 +499,34 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 return self.encode_example(struct)
             if all([attr in value for attr in self.required_keys]):
                 return value
-            value = atom_array_from_dict(value)
+            if "sequence" in value:
+                value = atom_array_from_dict(value)
+            else:
+                raise ValueError(
+                    "Cannot encode dict without sequence or (bytes/path/type)"
+                )
             return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
+            residue_starts = get_residue_starts(value)
+            if len(value) > 65535:
+                raise ValueError(
+                    "AtomArray too large to fit in uint16 (residue starts)"
+                )
             atom_array_struct = {
                 "coords": value.coord,
+                "residue_starts": residue_starts,
                 "aa_index": np.array(
                     [
                         protein_constants.restype_order_with_x[
                             protein_constants.restype_3to1[res_name]
                         ]
-                        for res_name in value.res_name
+                        for res_name in value.res_name[residue_starts]
                     ]
                 ),
                 "atom_name": value.atom_name,
             }
             if self.chain_id is None:
-                atom_array_struct["chain_id"] = value.chain_id
+                atom_array_struct["chain_id"] = value.chain_id[residue_starts]
             else:
                 atom_array_struct["chain_id"] = None
             for attr in [
@@ -522,7 +541,13 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 "hetero",
             ]:
                 if getattr(self, f"with_{attr}"):
-                    atom_array_struct[attr] = getattr(value, attr)
+                    if (
+                        attr == "b_factor" and self.bfactor_is_plddt
+                    ) or attr == "res_id":
+                        # residue-level annotation
+                        atom_array_struct[attr] = getattr(value, attr)[residue_starts]
+                    else:
+                        atom_array_struct[attr] = getattr(value, attr)
             if self.with_bonds:
                 bonds_array = value.bond_list.as_array()
                 assert bonds_array.ndim == 2 and bonds_array.shape[1] == 3
@@ -579,9 +604,17 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 f"with dtype '{self._annot[str(category)].dtype}' into '{dtype}'"
         """
         # TODO: optimise this...if we set format to numpy, everything is a numpy array which should be ideal
-        num_atoms = len(value["aa_index"])
+        num_atoms = len(value["atom_name"])
+        is_start_mask = np.zeros(num_atoms, dtype=bool)
+        is_start_mask[value.pop("residue_starts")] = True
+        residue_index = np.cumsum(is_start_mask) - 1
         if "res_id" not in value:
-            value["res_id"] = np.arange(num_atoms)
+            value["res_id"] = residue_index
+        # residue-level annotations -> atom-level annotations
+        value["aa_index"] = value["aa_index"][residue_index]
+        if "chain_id" in value:
+            value["chain_id"] = value["chain_id"][residue_index]
+
         arr = bs.AtomArray(num_atoms)
         value["res_name"] = np.array(protein_constants.resnames)[value["aa_index"]]
         arr.coord = value.pop("coords")
@@ -595,6 +628,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             arr.set_annotation(key, value)
         if self.chain_id is not None:
             arr.set_annotation("chain_id", np.array([self.chain_id] * num_atoms))
+
         return arr
 
 
