@@ -106,7 +106,7 @@ def load_structure(
         biotite.structure.AtomArray
     """
     format = FILE_TYPE_TO_EXT[format]
-    if fpath_or_handler.endswith(".gz"):
+    if isinstance(fpath_or_handler, str) and fpath_or_handler.endswith(".gz"):
         with gzip.open(fpath_or_handler, "rt") as f:
             fpath_or_handler = StringIO(f.read())
     if format == "cif":

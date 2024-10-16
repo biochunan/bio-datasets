@@ -36,6 +36,15 @@ def get_residue_starts_mask(
     return mask
 
 
+def tile_residue_annotation_to_atoms(
+    atoms: bs.AtomArray, residue_annotation: np.ndarray, residue_starts: np.ndarray
+) -> np.ndarray:
+    # use residue index as cumsum of residue starts
+    assert len(residue_annotation) == len(residue_starts)
+    residue_index = np.cumsum(get_residue_starts_mask(atoms, residue_starts)) - 1
+    return residue_annotation[residue_index]
+
+
 def get_relative_atom_indices_mapping() -> np.ndarray:
     """
     Get a mapping from atom37 index to expected index for a given residue.
@@ -119,7 +128,7 @@ class Protein:
 
     """A single protein chain.
 
-    N.B. whereas the atom array exposes atom level annotations,
+    N.B. whereas the underlying biotite atom array exposes atom-level annotations,
     this class exposes residue level annotations.
 
     TODO: add option to disable standardisation
@@ -173,22 +182,48 @@ class Protein:
         created a new atom array with number of atoms equal to the expected number of atoms,
         and then filling in the present atoms in the new array according to the expected index.
 
-        This validation ensures that methods like `backbone_positions`,`to_atom14`, and `to_atom37` can be applied safely downstream.
+        This standardisation ensures that methods like `backbone_positions`,`to_atom14`,
+        and `to_atom37` can be applied safely downstream.
         """
         # first we get an array of atom indices for each residue (i.e. a mapping from atom37 index to expected index
         # then we index into this array to get the expected index for each atom
         expected_relative_atom_indices = ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[
             atoms.aa_index, atoms.atom37_index
         ]
-        if np.any(expected_relative_atom_indices == -100):
+        final_residue_in_chain = atoms.chain_id[self._residue_starts] != np.concatenate(
+            [atoms.chain_id[self._residue_starts][1:], ["ZZZZ"]]
+        )
+        final_residue_in_chain = tile_residue_annotation_to_atoms(
+            atoms, final_residue_in_chain, self._residue_starts
+        )
+        oxt_mask = (atoms.atom_name == "OXT") & final_residue_in_chain
+        expected_relative_atom_indices[oxt_mask] = (
+            ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[atoms.aa_index[oxt_mask]].max() + 1
+        )
+        unexpected_atom_mask = expected_relative_atom_indices == -100
+        if np.any(unexpected_atom_mask):
+            unexpected_atoms = atoms.atom_name[unexpected_atom_mask]
+            unexpected_residues = atoms.res_name[unexpected_atom_mask]
+            unexpected_str = "\n".join(
+                [
+                    f"{res_name} {res_id} {atom_name}"
+                    for res_name, res_id, atom_name in zip(
+                        unexpected_residues,
+                        atoms.res_id[unexpected_atom_mask],
+                        unexpected_atoms,
+                    )
+                ]
+            )
             raise ValueError(
-                "At least one unexpected atom detected in a residue. HETATMs are not supported."
+                f"At least one unexpected atom detected in a residue: {unexpected_str}.\n"
+                f"HETATMs are not supported."
             )
 
         # we need to add these indices to expected residue starts
         expected_residue_sizes = RESIDUE_SIZES[
             atoms.aa_index[self._residue_starts]
-        ]  # (n_residues,) NOT (n_atoms,)
+        ]  # (n_residues,) NOT (n_atoms,) -- add 1 to account for OXT
+        expected_residue_sizes[final_residue_in_chain[self._residue_starts]] += 1
         expected_residue_starts = np.concatenate(
             [[0], np.cumsum(expected_residue_sizes)[:-1]]
         )  # (n_residues,)
@@ -224,10 +259,18 @@ class Protein:
             np.arange(len(new_atom_array))
             - expected_residue_starts[new_atom_array.residue_index]
         )
-        new_atom_array.set_annotation(
-            "atom_name",
-            STANDARD_ATOMS_BY_RESIDUE[new_atom_array.aa_index, relative_atom_index],
+        new_atom_array.chain_id = atoms.chain_id[atomwise_residue_starts]
+        expected_atom_names = new_atom_array.atom_name
+        # final atom in chain is OXT
+        expected_oxt_mask = new_atom_array.chain_id != np.concatenate(
+            [new_atom_array.chain_id[1:], ["ZZZZ"]]
         )
+        expected_atom_names[expected_oxt_mask] = "OXT"
+        expected_atom_names[~expected_oxt_mask] = STANDARD_ATOMS_BY_RESIDUE[
+            new_atom_array.aa_index[~expected_oxt_mask],
+            relative_atom_index[~expected_oxt_mask],
+        ]
+
         new_atom_array.set_annotation(
             "atom37_index",
             map_categories_to_indices(new_atom_array.atom_name, atom_types),
@@ -235,7 +278,6 @@ class Protein:
         assert np.all(
             new_atom_array.atom_name != ""
         ), "All atoms must be assigned a name"
-        new_atom_array.chain_id[:] = atoms.chain_id[0]
         mask = np.zeros(len(new_atom_array), dtype=bool)
         mask[expected_atom_indices] = True
         missing_atoms_strings = [
