@@ -1,10 +1,10 @@
 # Bio Datasets
 
-Bringing bio (molecules and more) to the huggingface datasets library
+Bringing bio (molecules and more) to the HuggingFace Datasets library
 
 ## Features
 
-* Full integration with the HuggingFace datasets library including saving and loading datasets
+* Full integration with the HuggingFace Datasets library including saving and loading datasets
   to HuggingFace hub, memory mapping, streaming of large datasets etc.
 * Built-in support for efficient storage formats for biological data (e.g. foldcomp fcz format for protein structures)
 * Automatic conversion of data between internal storage formats and convenient formats for manipulation
@@ -34,6 +34,8 @@ the dependency.
 ## Usage
 
 ### Loading data from the Hub
+
+We provide examples of datasets pre-configured with Bio features that can be downloaded from the hub.
 
 ```python
 import bio_datasets  # necessary to register the custom feature types with the datasets library
@@ -103,17 +105,21 @@ controlling the formats in which data is stored and loaded.
 
 ```python
 from datasets import Dataset, Features
-from bio_datasets import BiomolecularStructureFile
+from bio_datasets import ProteinStructureFeature
 
 
-def examples_generator(pdb_file_list, features):
+def examples_generator(pdb_file_list):
     for file_path in pdb_file_list:
         yield features.encode_example({"path": file_path})
 
 
-ds = Dataset.from_generator(example_generator, gen_kwargs={"pdb_file_list": pdb_file_list, "features": features})
+# create a dataset which will save data to disk as a foldcomp-encoded byte string, but which will automatically
+# decode that data to biotite atom arrays during loading / iteration
+features = Features(structure=ProteinStructureFeature(encode_with_foldcomp=True))
+ds = Dataset.from_generator(example_generator, gen_kwargs={"pdb_file_list": pdb_file_list}, features=features)
+ds[0]
 
-# SHARE YOUR DATASET WITH BIO FEATURES TO THE HUB!
+# share your bio dataset to the HuggingFace hub!
 ds.push_to_hub(HUB_REPO_ID)
 ```
 There are a couple of other ways of converting local files into Bio feature types:
@@ -123,14 +129,9 @@ use cast_column (https://huggingface.co/docs/datasets/image_load#local-files) or
 
 ### Sharing data to the hub
 
-As shown above, the standard Datasets library ds.push_to_hub can be used to share
-Datasets with bio-datasets feature types.
-
-Crucially, if you create a dataset with bio-datasets feature types, and a user
-downloads it using the datasets library with bio-datasets installed, their bio data
-will automatically be decoded into the format for manipulation configured by the feature
-type (e.g. AtomArray and BiomolecularStructureFile types will be decoded into biotite
-AtomArray objects for convenient manipulation.).
+`ds.push_to_hub` will automatically save information about the Feature types stored
+in the dataset. If a user with bio-datasets installed downloads the dataset, their bio
+data will then automatically be decoded in the way specified by the Features.
 
 ### Creating your own feature types
 
