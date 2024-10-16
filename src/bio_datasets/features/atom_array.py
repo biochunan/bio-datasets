@@ -19,8 +19,8 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pyarrow as pa
 from biotite import structure as bs
-from biotite.sequence import ProteinSequence
 from biotite.structure import get_chains
+from biotite.structure.filter import filter_amino_acids
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFFile
 from datasets import Array1D, Array2D, config
@@ -32,12 +32,7 @@ from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 from bio_datasets import config as bio_config
 from bio_datasets.protein import constants as protein_constants
-from bio_datasets.protein.protein import (
-    BACKBONE_ATOMS,
-    Protein,
-    ProteinComplex,
-    filter_backbone,
-)
+from bio_datasets.protein.protein import BACKBONE_ATOMS, Protein, filter_backbone
 
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
@@ -783,6 +778,10 @@ class ProteinStructureFeature(StructureFeature):
     decode_as: ClassVar[str] = "protein"
     _type: str = field(default="ProteinStructure", init=False, repr=False)
 
+    def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
+        atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
+        return Protein(filter_amino_acids(atoms))
+
 
 @dataclass
 class ProteinAtomArrayFeature(AtomArrayFeature):
@@ -794,14 +793,15 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
     )  # registered feature name
 
     def encode_example(self, value: Union[Protein, dict, bs.AtomArray]) -> dict:
+        if isinstance(value, bs.AtomArray):
+            return super().encode_example(filter_amino_acids(value))
+        if isinstance(value, Protein):
+            return self.encode_example(value.backbone().atoms)
         if self.drop_sidechains:
             if isinstance(value, bs.AtomArray):
                 value = value[filter_backbone(value)]
-            elif isinstance(value, Protein):
-                value = value.backbone()
         return super().encode_example(value)
 
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
-        return Protein(
-            super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
-        )
+        atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
+        return Protein(filter_amino_acids(atoms))
