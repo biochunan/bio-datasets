@@ -31,9 +31,8 @@ from datasets.utils.file_utils import is_local_path, xopen, xsplitext
 from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 from bio_datasets import config as bio_config
-from bio_datasets.protein import (
-    AA_NAME_TO_INDEX,
-    AA_NAMES,
+from bio_datasets.protein import constants as protein_constants
+from bio_datasets.protein.protein import (
     BACKBONE_ATOMS,
     Protein,
     ProteinComplex,
@@ -168,7 +167,7 @@ def atom_array_from_dict(d: dict) -> bs.AtomArray:
                 aa = "C"
             if aa == "O":
                 aa = "K"
-            res_name = ProteinSequence.convert_letter_1to3(aa)
+            res_name = protein_constants.restype_1to3[aa]
             for atom_name in BACKBONE_ATOMS:
                 annots = {}
                 for k in annots_keys:
@@ -502,9 +501,13 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         elif isinstance(value, bs.AtomArray):
             atom_array_struct = {
                 "coords": value.coord,
-                # TODO: consider using searchsorted for this
                 "aa_index": np.array(
-                    [AA_NAME_TO_INDEX[res_name] for res_name in value.res_name]
+                    [
+                        protein_constants.restype_order_with_x[
+                            protein_constants.restype_3to1[res_name]
+                        ]
+                        for res_name in value.res_name
+                    ]
                 ),
                 "atom_name": value.atom_name,
             }
@@ -585,7 +588,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         if "res_id" not in value:
             value["res_id"] = np.arange(num_atoms)
         arr = bs.AtomArray(num_atoms)
-        value["res_name"] = np.array(AA_NAMES)[value["aa_index"]]
+        value["res_name"] = np.array(protein_constants.resnames)[value["aa_index"]]
         arr.coord = value.pop("coords")
         if "bond_edges" in value:
             bonds_array = value.pop("bond_edges")
