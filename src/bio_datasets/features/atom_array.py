@@ -414,8 +414,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     requires_decoding: bool = True
     decode: bool = True
     coords_dtype: str = "float32"
-    bfactor_is_plddt: bool = False
-    bfactor_dtype: str = "float32"
+    b_factor_is_plddt: bool = False
+    b_factor_dtype: str = "float32"
     chain_id: Optional[
         str
     ] = None  # single chain id - means we will intepret structure as a single chain
@@ -448,7 +448,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             features.append(("occupancy", Array1D((None,), "float16")))
         if self.with_b_factor:
             # TODO: maybe have specific storage format for plddt bfactor (fixed range)
-            features.append(("b_factor", Array1D((None,), self.bfactor_dtype)))
+            features.append(("b_factor", Array1D((None,), self.b_factor_dtype)))
         if self.with_charge:
             features.append(("charge", Array1D((None,), "int8")))
         if self.with_element:
@@ -493,7 +493,9 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         if isinstance(value, dict):
             if "bytes" in value or "path" in value or "type" in value:
                 # if it's already encoded, we don't need to encode it again
-                struct = load_structure_from_file_dict(value)
+                struct = load_structure_from_file_dict(
+                    value, extra_fields=self.extra_fields
+                )
                 return self.encode_example(struct)
             if all([attr in value for attr in self.required_keys]):
                 return value
@@ -540,7 +542,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             ]:
                 if getattr(self, f"with_{attr}"):
                     if (
-                        attr == "b_factor" and self.bfactor_is_plddt
+                        attr == "b_factor" and self.b_factor_is_plddt
                     ) or attr == "res_id":
                         # residue-level annotation
                         atom_array_struct[attr] = getattr(value, attr)[residue_starts]
@@ -613,7 +615,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         value["aa_index"] = value["aa_index"][residue_index]
         if "chain_id" in value:
             value["chain_id"] = value["chain_id"][residue_index]
-        if self.bfactor_is_plddt and "b_factor" in value:
+        if self.b_factor_is_plddt and "b_factor" in value:
             value["b_factor"] = value["b_factor"][residue_index]
 
         arr = bs.AtomArray(num_atoms)
@@ -682,7 +684,9 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         This determines what gets written to the Arrow file.
         TODO: accept Protein as input?
         """
-        file_type = infer_type_from_structure_file_dict(value)
+        file_type = infer_type_from_structure_file_dict(
+            value, extra_fields=self.extra_fields
+        )
         if isinstance(value, str):
             return {"path": value, "bytes": None, "type": file_type}
         elif isinstance(value, bytes):

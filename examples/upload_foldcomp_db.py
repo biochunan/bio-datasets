@@ -35,11 +35,20 @@ def main(
     as_array: bool,
     config_name: Optional[str] = None,
     max_examples: Optional[int] = None,
+    coords_dtype: str = "float32",
 ):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
+    feature_kwargs = {
+        "coords_dtype": coords_dtype,
+        "with_b_factor": True,
+        "b_factor_is_plddt": True,
+        "b_factor_dtype": "float16",
+    }
     features = Features(
         name=Value("string"),
-        structure=ProteinAtomArrayFeature() if as_array else ProteinStructureFeature(),
+        structure=ProteinAtomArrayFeature(**feature_kwargs)
+        if as_array
+        else ProteinStructureFeature(**feature_kwargs),
     )
     import tempfile
 
@@ -61,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--as_array", action="store_true")
     parser.add_argument("--config_name", type=str, default=None)
     parser.add_argument("--max_examples", type=int, default=None)
+    parser.add_argument("--coords_dtype", type=str, default="float32")
     args = parser.parse_args()
     if args.foldcomp_db_name is None and args.foldcomp_db_path is None:
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
@@ -79,4 +89,5 @@ if __name__ == "__main__":
         args.as_array,
         config_name=args.config_name,
         max_examples=args.max_examples,
+        coords_dtype=args.coords_dtype,
     )
