@@ -333,10 +333,6 @@ class _AtomArrayFeatureMixin:
 @dataclass
 class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     """
-    TODO: we shouldn't store residue level annotations at the atom level: instead we should
-    store residue starts and then store residue-level annotations separately. If we are dealing
-    with AFDB structures, then plddt is a residue-level annotation.
-
     AtomArray [`Feature`] to read macromolecular atomic structure data from a PDB or CIF file.
 
     This feature stores the array directly as a pa struct (basically a dictionary of arrays),
@@ -614,6 +610,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         value["aa_index"] = value["aa_index"][residue_index]
         if "chain_id" in value:
             value["chain_id"] = value["chain_id"][residue_index]
+        if self.bfactor_is_plddt and "b_factor" in value:
+            value["b_factor"] = value["b_factor"][residue_index]
 
         arr = bs.AtomArray(num_atoms)
         value["res_name"] = np.array(protein_constants.resnames)[value["aa_index"]]
