@@ -66,11 +66,13 @@ if __name__ == "__main__":
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
     if args.foldcomp_db_name is not None:
         try:
+            os.chdir("data")
             foldcomp.setup(args.foldcomp_db_name)
         except KeyError as e:
             # https://github.com/steineggerlab/foldcomp/issues/60
             print("Ignoring foldcomp setup error: ", e)
-        args.foldcomp_db_path = args.foldcomp_db_name
+        os.chdir("..")
+        args.foldcomp_db_path = os.path.join("data", args.foldcomp_db_name)
     main(
         args.repo_id,
         args.foldcomp_db_path,
