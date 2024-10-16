@@ -51,8 +51,8 @@ print(type(ex["structure"]))
 print(features)
 ```
 ```
-biotite.structure.AtomArray
-{'name': Value(dtype='string', id=None), 'structure': StructureFeature(with_box=False, with_bonds=False, with_occupancy=False, with_b_factor=False, with_res_id=False, with_atom_id=False, with_charge=False, with_element=False, with_ins_code=False, with_hetero=False, requires_encoding=True, requires_decoding=True, decode=True, id=None, encode_with_foldcomp=False)}
+<class 'bio_datasets.protein.Protein'>
+{'name': Value(dtype='string', id=None), 'structure': ProteinStructureFeature(with_box=False, with_bonds=False, with_occupancy=False, with_b_factor=False, with_res_id=False, with_atom_id=False, with_charge=False, with_element=False, with_ins_code=False, with_hetero=False, requires_encoding=True, requires_decoding=True, decode=True, id=None, encode_with_foldcomp=False)}
 ```
 
 `bio_datasets.StructureFeature` feature data is stored internally in either foldcomp compressed PDB format
@@ -64,7 +64,7 @@ using [fastpdb](https://github.com/biotite-dev/fastpdb) if you have it installed
 
 If you want even quicker processing, we also support storing data in a native array format
 that supports blazingly fast iteration over fully featurised samples. For example, we can
-instead load the afdb_e_coli dataset with the structure encoded as a `bio_datasets.AtomArrayFeature`
+instead load the `afdb_e_coli` dataset with the structure encoded as a `bio_datasets.AtomArrayFeature`
 
 ```python
 import timeit
@@ -110,13 +110,13 @@ from bio_datasets import ProteinStructureFeature
 
 def examples_generator(pdb_file_list):
     for file_path in pdb_file_list:
-        yield features.encode_example({"path": file_path})
+        yield {"structure": {"path": file_path}}  # generate examples in 'raw' format
 
 
 # create a dataset which will save data to disk as a foldcomp-encoded byte string, but which will automatically
 # decode that data to biotite atom arrays during loading / iteration
 features = Features(structure=ProteinStructureFeature(encode_with_foldcomp=True))
-ds = Dataset.from_generator(example_generator, gen_kwargs={"pdb_file_list": pdb_file_list}, features=features)
+ds = Dataset.from_generator(examples_generator, gen_kwargs={"pdb_file_list": pdb_file_list}, features=features, cache_dir=temp_dir)
 ds[0]
 
 # share your bio dataset to the HuggingFace hub!

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 import tqdm
 from datasets import Dataset, Features, NamedSplit, Value
 
-from bio_datasets.features import AtomArray
+from bio_datasets.features import ProteinAtomArrayFeature
 
 
 def load_coords(
@@ -81,7 +81,7 @@ def main(
         assert len(split_coords) > 0, f"No examples found for split {split_name}"
         # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
         features = Features(
-            backbone=AtomArray(),
+            backbone=ProteinAtomArrayFeature(),
             num_chains=Value("int32"),
             name=Value("string"),
             CATH=Value("string"),

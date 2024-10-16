@@ -111,6 +111,9 @@ def load_structure(
         biotite.structure.AtomArray
     """
     format = FILE_TYPE_TO_EXT[format]
+    if fpath_or_handler.endswith(".gz"):
+        with gzip.open(fpath_or_handler, "rt") as f:
+            fpath_or_handler = StringIO(f.read())
     if format == "cif":
         pdbxf = CIFFile.read(fpath_or_handler)
         structure = pdbxf.get_structure(
@@ -218,9 +221,10 @@ def infer_type_from_structure_file_dict(d: dict) -> Tuple[Optional[str], Optiona
     if "type" in d and d["type"] is not None:
         return d["type"]
     elif "path" in d:
-        ext = xsplitext(d["path"])[1][1:]
-        if ext.endswith(".gz"):
-            ext = ext[:-3]
+        path = d["path"]
+        if path.endswith(".gz"):
+            path = path[:-3]
+        ext = xsplitext(path)[1][1:]
         return ext
     elif "bytes" in d:
         return infer_bytes_format(d["bytes"])
@@ -774,6 +778,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
 @dataclass
 class ProteinStructureFeature(StructureFeature):
     decode_as: ClassVar[str] = "protein"
+    _type: str = field(default="ProteinStructure", init=False, repr=False)
 
 
 @dataclass
