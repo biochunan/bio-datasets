@@ -9,6 +9,7 @@ from typing import List, Optional, Union
 
 import biotite.structure as bs
 import numpy as np
+from biotite.structure.filter import filter_amino_acids
 from biotite.structure.residues import get_residue_starts
 
 from bio_datasets.np_utils import map_categories_to_indices
