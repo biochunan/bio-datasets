@@ -518,8 +518,9 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
             if self.all_atoms_present:
-                value = Protein.standardise_atoms(value)
-            residue_starts = get_residue_starts(value)
+                value, residue_starts = Protein.standardise_atoms(value)
+            else:
+                residue_starts = get_residue_starts(value)
             if len(value) > 65535:
                 raise ValueError(
                     "AtomArray too large to fit in uint16 (residue starts)"
@@ -869,6 +870,7 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
                 b_factor_dtype="float16",
                 coords_dtype="float16",
                 all_atoms_present=True,
+                chain_id="A",
             )
         elif preset == "pdb":
             return cls(with_b_factor=False, coords_dtype="float16")

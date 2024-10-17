@@ -24,6 +24,7 @@ from .constants import (
 )
 
 BACKBONE_ATOMS = ["N", "CA", "C", "O"]
+ALL_EXTRA_FIELDS = ["occupancy", "b_factor", "atom_id", "charge"]
 
 
 def get_residue_starts_mask(
@@ -124,7 +125,9 @@ def set_annotation_at_masked_atoms(
 
 
 def create_complete_atom_array_from_aa_index(
-    aa_index: np.ndarray, chain_id: Union[str, np.ndarray]
+    aa_index: np.ndarray,
+    chain_id: Union[str, np.ndarray],
+    extra_fields: Optional[List[str]] = None,
 ):
     """
     Populate annotations from aa_index, assuming all atoms are present.
@@ -160,19 +163,23 @@ def create_complete_atom_array_from_aa_index(
     relative_atom_index = np.arange(len(new_atom_array)) - residue_starts[residue_index]
     atom_names = new_atom_array.atom_name
     atom_names[oxt_mask] = "OXT"
+    new_atom_array.set_annotation("aa_index", aa_index[residue_index])
     atom_names[~oxt_mask] = STANDARD_ATOMS_BY_RESIDUE[
         new_atom_array.aa_index[~oxt_mask],
         relative_atom_index[~oxt_mask],
     ]
     new_atom_array.set_annotation("atom_name", atom_names)
-    new_atom_array.set_annotation("aa_index", aa_index[residue_index])
     new_atom_array.set_annotation(
         "res_name", np.array(resnames)[new_atom_array.aa_index]
     )
     new_atom_array.set_annotation("residue_index", residue_index)
     new_atom_array.set_annotation("res_id", residue_index + 1)
     full_annot_names += ["atom_name", "aa_index", "res_name", "residue_index", "res_id"]
-
+    if extra_fields is not None:
+        for f in extra_fields:
+            new_atom_array.add_annotation(
+                f, dtype=float if f in ["occupancy", "b_factor"] else int
+            )
     return new_atom_array, residue_starts, full_annot_names
 
 
@@ -201,14 +208,13 @@ class Protein:
         """
         atoms = atoms[filter_amino_acids(atoms)]
         assert np.unique(atoms.chain_id).size == 1, "Only a single chain is supported"
-        residue_starts = get_residue_starts(atoms)
-        self._set_atom_annotations(atoms)
         self.atoms, self._residue_starts = self.standardise_atoms(
-            atoms, residue_starts, verbose=verbose
+            atoms, verbose=verbose
         )
         self._standardised = True
 
-    def _set_atom_annotations(self, atoms):
+    @staticmethod
+    def set_atom_annotations(atoms, residue_starts):
         # convert selenium to sulphur
         mse_selenium_mask = (atoms.res_name == "MSE") & (atoms.atom_name == "SE")
         sec_selenium_mask = (atoms.res_name == "SEC") & (atoms.atom_name == "SE")
@@ -223,8 +229,9 @@ class Protein:
         atoms.set_annotation("aa_index", get_aa_index(atoms.res_name))
         atoms.set_annotation(
             "residue_index",
-            np.cumsum(get_residue_starts_mask(atoms, self._residue_starts)) - 1,
+            np.cumsum(get_residue_starts_mask(atoms, residue_starts)) - 1,
         )
+        return atoms
 
     @staticmethod
     def standardise_atoms(
@@ -243,6 +250,8 @@ class Protein:
         """
         if residue_starts is None:
             residue_starts = get_residue_starts(atoms)
+
+        atoms = Protein.set_atom_annotations(atoms, residue_starts)
         # first we get an array of atom indices for each residue (i.e. a mapping from atom37 index to expected index
         # then we index into this array to get the expected index for each atom
         expected_relative_atom_indices = ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[
@@ -283,7 +292,11 @@ class Protein:
             new_atom_array,
             full_residue_starts,
             full_annot_names,
-        ) = create_complete_atom_array_from_aa_index(atoms.aa_index, atoms.chain_id)
+        ) = create_complete_atom_array_from_aa_index(
+            atoms.aa_index[residue_starts],
+            atoms.chain_id[residue_starts],
+            extra_fields=[f for f in ALL_EXTRA_FIELDS if f in atoms._annot],
+        )
         existing_atom_indices_in_full_array = (
             full_residue_starts[atoms.residue_index] + expected_relative_atom_indices
         ).astype(int)
@@ -298,7 +311,9 @@ class Protein:
         # set_annotation vs setattr: set_annotation adds to annot and verifies size
         new_atom_array.coord[existing_atom_indices_in_full_array] = atoms.coord
         # if we can create a res start index for each atom, we can assign the value based on that...
-        assert len(full_residue_starts) == len(residue_starts)
+        assert len(full_residue_starts) == len(
+            residue_starts
+        ), f"Full residue starts: {full_residue_starts} and residue starts: {residue_starts} do not match"
         new_atom_array.set_annotation(
             "res_id", atoms.res_id[residue_starts][new_atom_array.residue_index]
         )  # override with auth res id

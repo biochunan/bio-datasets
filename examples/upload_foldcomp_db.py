@@ -60,18 +60,11 @@ def main(
     coords_dtype: str = "float32",
 ):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
-    feature_kwargs = {
-        "coords_dtype": coords_dtype,
-        "with_b_factor": True,
-        "b_factor_is_plddt": True,
-        "b_factor_dtype": "float16",
-        "chain_id": "A",
-    }
     features = Features(
         name=Value("string"),
-        structure=ProteinAtomArrayFeature(**feature_kwargs)
+        structure=ProteinAtomArrayFeature.from_preset("afdb")
         if as_array
-        else ProteinStructureFeature(**feature_kwargs),
+        else ProteinStructureFeature(),  # TODO: add feature kwargs / preset
     )
     import tempfile
 
@@ -82,7 +75,7 @@ def main(
             features=features,
             cache_dir=temp_dir,
         )
-        ds.push_to_hub(repo_id, config_name=config_name or "default")
+        # ds.push_to_hub(repo_id, config_name=config_name or "default")
 
 
 if __name__ == "__main__":
