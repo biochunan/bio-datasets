@@ -538,7 +538,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             }
             if not self.all_atoms_present:
                 atom_array_struct["residue_starts"] = residue_starts
-                atom_array_struct["atom_name"] = value.atom_name[residue_starts]
+                atom_array_struct["atom_name"] = value.atom_name
             if self.chain_id is None:
                 atom_array_struct["chain_id"] = value.chain_id[residue_starts]
             else:
