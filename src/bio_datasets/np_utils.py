@@ -1,5 +1,6 @@
-import numpy as np
 from typing import List
+
+import numpy as np
 
 
 def map_categories_to_indices(arr: np.ndarray, categories: List[str]) -> np.ndarray:
