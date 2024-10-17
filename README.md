@@ -43,6 +43,7 @@ To illustrate, we provide examples of datasets pre-configured with Bio Datasets 
 ```python
 import bio_datasets  # necessary to register the custom feature types with the datasets library
 from datasets import load_dataset
+import foldcomp  # required by `ex = dataset[0]`
 
 dataset = load_dataset(
     "graph-transformers/afdb_e_coli",
