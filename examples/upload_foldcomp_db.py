@@ -44,6 +44,7 @@ def examples_generator(db_file, max_examples: Optional[int] = None):
         for (name, pdb_str) in itertools.islice(db, max_examples):
             # if we opened with decompress False, we wouldn't get name
             pdb_bytes = foldcomp.compress(name, pdb_str)
+            # pdb_bytes = bytes(pdb_str)
             example = {
                 "name": name,
                 "structure": {"bytes": pdb_bytes, "path": None, "type": "fcz"},

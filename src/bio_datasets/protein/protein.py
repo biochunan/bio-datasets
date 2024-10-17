@@ -128,19 +128,26 @@ def create_complete_atom_array_from_aa_index(
     aa_index: np.ndarray,
     chain_id: Union[str, np.ndarray],
     extra_fields: Optional[List[str]] = None,
+    backbone_only: bool = False,
 ):
     """
     Populate annotations from aa_index, assuming all atoms are present.
     """
-    residue_sizes = RESIDUE_SIZES[
-        aa_index
-    ]  # (n_residues,) NOT (n_atoms,) -- add 1 to account for OXT
-    if isinstance(chain_id, str):
+    if backbone_only:
+        residue_sizes = [4] * len(aa_index)
+    else:
+        residue_sizes = RESIDUE_SIZES[
+            aa_index
+        ]  # (n_residues,) NOT (n_atoms,) -- add 1 to account for OXT
+    if isinstance(chain_id, str) and not backbone_only:
         residue_sizes[-1] += 1  # final OXT
     else:
-        assert len(chain_id) == len(residue_sizes)
-        final_residue_in_chain = chain_id != np.concatenate([chain_id[1:], ["ZZZZ"]])
-        residue_sizes[final_residue_in_chain] += 1
+        if not backbone_only:
+            assert len(chain_id) == len(residue_sizes)
+            final_residue_in_chain = chain_id != np.concatenate(
+                [chain_id[1:], ["ZZZZ"]]
+            )
+            residue_sizes[final_residue_in_chain] += 1
     residue_starts = np.concatenate(
         [[0], np.cumsum(residue_sizes)[:-1]]
     )  # (n_residues,)
@@ -157,12 +164,15 @@ def create_complete_atom_array_from_aa_index(
     full_annot_names.append("chain_id")
 
     # final atom in chain is OXT
-    oxt_mask = new_atom_array.chain_id != np.concatenate(
-        [new_atom_array.chain_id[1:], ["ZZZZ"]]
-    )
     relative_atom_index = np.arange(len(new_atom_array)) - residue_starts[residue_index]
     atom_names = new_atom_array.atom_name
-    atom_names[oxt_mask] = "OXT"
+    if not backbone_only:
+        oxt_mask = new_atom_array.chain_id != np.concatenate(
+            [new_atom_array.chain_id[1:], ["ZZZZ"]]
+        )
+        atom_names[oxt_mask] = "OXT"
+    else:
+        oxt_mask = np.zeros(len(new_atom_array), dtype=bool)
     new_atom_array.set_annotation("aa_index", aa_index[residue_index])
     atom_names[~oxt_mask] = STANDARD_ATOMS_BY_RESIDUE[
         new_atom_array.aa_index[~oxt_mask],
@@ -207,6 +217,7 @@ class Protein:
         atoms : AtomArray
             The atoms of the protein.
         """
+        self.backbone_only = backbone_only
         atoms = atoms[filter_amino_acids(atoms)]
         assert np.unique(atoms.chain_id).size == 1, "Only a single chain is supported"
         self.atoms, self._residue_starts = self.standardise_atoms(

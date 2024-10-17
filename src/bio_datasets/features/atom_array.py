@@ -636,7 +636,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 chain_id = np.full(len(aa_index), self.chain_id)
                 del value["chain_id"]
             atoms, residue_starts, _ = create_complete_atom_array_from_aa_index(
-                aa_index, chain_id
+                aa_index, chain_id, backbone_only=self.drop_sidechains
             )
             residue_index = (
                 np.cumsum(get_residue_starts_mask(atoms, residue_starts)) - 1
@@ -901,5 +901,5 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
         atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
         return Protein(
-            atoms[filter_amino_acids(atoms)], backbone_only=self.backbone_only
+            atoms[filter_amino_acids(atoms)], backbone_only=self.drop_sidechains
         )
