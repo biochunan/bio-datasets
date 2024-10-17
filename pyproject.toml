@@ -14,6 +14,7 @@ requires-python = ">=3.7"
 [tool.poetry.dependencies]
 biotite = ">=1.0.0"
 datasets = {git = "https://github.com/alex-hh/datasets.git", rev = "iterable-dataset-fixes"}
+foldcomp = {git = "https://github.com/alex-hh/foldcomp.git", rev = "main"}
 
 [tool.poetry.source]
 name = "pypi"
