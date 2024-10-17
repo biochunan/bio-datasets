@@ -58,13 +58,16 @@ def main(
     config_name: Optional[str] = None,
     max_examples: Optional[int] = None,
     coords_dtype: str = "float32",
+    backbone_only: bool = False,
 ):
     # from_generator calls GeneratorBasedBuilder.download_and_prepare and as_dataset
     features = Features(
         name=Value("string"),
-        structure=ProteinAtomArrayFeature.from_preset("afdb")
+        structure=ProteinAtomArrayFeature.from_preset(
+            "afdb", drop_sidechains=backbone_only
+        )
         if as_array
-        else ProteinStructureFeature(),  # TODO: add feature kwargs / preset
+        else ProteinStructureFeature(with_b_factor=True, drop_sidechains=backbone_only),
     )
     import tempfile
 
@@ -75,7 +78,7 @@ def main(
             features=features,
             cache_dir=temp_dir,
         )
-        # ds.push_to_hub(repo_id, config_name=config_name or "default")
+        ds.push_to_hub(repo_id, config_name=config_name or "default")
 
 
 if __name__ == "__main__":
@@ -87,6 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("--config_name", type=str, default=None)
     parser.add_argument("--max_examples", type=int, default=None)
     parser.add_argument("--coords_dtype", type=str, default="float32")
+    parser.add_argument("--backbone_only", action="store_true")
     args = parser.parse_args()
     if args.foldcomp_db_name is None and args.foldcomp_db_path is None:
         raise ValueError("Either foldcomp_db_name or foldcomp_db_path must be provided")
@@ -106,4 +110,5 @@ if __name__ == "__main__":
         config_name=args.config_name,
         max_examples=args.max_examples,
         coords_dtype=args.coords_dtype,
+        backbone_only=args.backbone_only,
     )

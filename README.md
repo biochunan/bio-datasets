@@ -48,7 +48,7 @@ dataset = load_dataset(
     "graph-transformers/afdb_e_coli",
     split="train",
 )
-ex = dataset[0]  # a dict with keys `name` and `structure` (a biotite AtomArray)
+ex = dataset[0]  # a dict with keys `name` and `structure` (a `biotite.structure.AtomArray` wrapped in a `bio_datasets.Protein` object for standardisation.)
 print(type(ex["structure"]))
 ```
 ```

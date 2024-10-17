@@ -199,6 +199,7 @@ class Protein:
         self,
         atoms: bs.AtomArray,
         verbose: bool = False,
+        backbone_only: bool = False,
     ):
         """
         Parameters
@@ -209,7 +210,7 @@ class Protein:
         atoms = atoms[filter_amino_acids(atoms)]
         assert np.unique(atoms.chain_id).size == 1, "Only a single chain is supported"
         self.atoms, self._residue_starts = self.standardise_atoms(
-            atoms, verbose=verbose
+            atoms, verbose=verbose, backbone_only=backbone_only
         )
         self._standardised = True
 
@@ -235,14 +236,17 @@ class Protein:
 
     @staticmethod
     def standardise_atoms(
-        atoms, residue_starts: Optional[np.ndarray] = None, verbose: bool = False
+        atoms,
+        residue_starts: Optional[np.ndarray] = None,
+        verbose: bool = False,
+        backbone_only: bool = False,
     ):
         """We want all atoms to be present, with nan coords if any are missing.
 
         We also want to ensure that atoms are in the correct order.
 
         We can do this in a vectorised way by calculating the expected index of each atom,
-        created a new atom array with number of atoms equal to the expected number of atoms,
+        creating a new atom array with number of atoms equal to the expected number of atoms,
         and then filling in the present atoms in the new array according to the expected index.
 
         This standardisation ensures that methods like `backbone_positions`,`to_atom14`,
@@ -341,6 +345,10 @@ class Protein:
         if verbose:
             print("Filled in missing atoms:\n", "\n".join(missing_atoms_strings))
         new_atom_array.set_annotation("mask", mask)
+        if backbone_only:
+            # TODO: more efficient backbone only
+            new_atom_array = new_atom_array[filter_backbone(new_atom_array)]
+            full_residue_starts = get_residue_starts(new_atom_array)
         return new_atom_array, full_residue_starts
 
     @property

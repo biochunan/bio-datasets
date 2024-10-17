@@ -419,6 +419,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     all_atoms_present: ClassVar[
         bool
     ] = False  # to use this, need to be decoding to Protein (ProteinAtomArrayFeature)
+    drop_sidechains: ClassVar[bool] = False
     requires_encoding: bool = True
     requires_decoding: bool = True
     decode: bool = True
@@ -518,7 +519,14 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
             if self.all_atoms_present:
-                value, residue_starts = Protein.standardise_atoms(value)
+                orig_length = len(value)
+                value, residue_starts = Protein.standardise_atoms(
+                    value, backbone_only=self.drop_sidechains
+                )
+                if len(value) != orig_length:
+                    raise ValueError(
+                        "Standardisation changed the length of the atom array"
+                    )
             else:
                 residue_starts = get_residue_starts(value)
             if len(value) > 65535:
@@ -626,6 +634,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 chain_id = value.pop("chain_id")  # residue-level annotation
             else:
                 chain_id = np.full(len(aa_index), self.chain_id)
+                del value["chain_id"]
             atoms, residue_starts, _ = create_complete_atom_array_from_aa_index(
                 aa_index, chain_id
             )
@@ -644,7 +653,7 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
             else:
                 atoms.set_annotation("res_id", residue_index + 1)  # 1-based residue ids
             atoms.set_annotation("aa_index", value.pop("aa_index")[residue_index])
-            if "chain_id" in value:
+            if "chain_id" in value and self.chain_id is None:
                 atoms.set_annotation("chain_id", value.pop("chain_id")[residue_index])
             elif self.chain_id is not None:
                 atoms.set_annotation("chain_id", np.full(num_atoms, self.chain_id))
@@ -861,7 +870,7 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
     )  # registered feature name
 
     @classmethod
-    def from_preset(cls, preset: str):
+    def from_preset(cls, preset: str, **kwargs):
         if preset == "afdb":
             return cls(
                 with_b_factor=True,
@@ -871,22 +880,26 @@ class ProteinAtomArrayFeature(AtomArrayFeature):
                 coords_dtype="float16",
                 all_atoms_present=True,
                 chain_id="A",
+                **kwargs,
             )
         elif preset == "pdb":
-            return cls(with_b_factor=False, coords_dtype="float16")
+            return cls(with_b_factor=False, coords_dtype="float16", **kwargss)
         else:
             raise ValueError(f"Unknown preset: {preset}")
 
     def encode_example(self, value: Union[Protein, dict, bs.AtomArray]) -> dict:
         if isinstance(value, bs.AtomArray):
+            if self.drop_sidechains:
+                value = value[filter_backbone(value)]
             return super().encode_example(value[filter_amino_acids(value)])
         if isinstance(value, Protein):
-            return self.encode_example(value.backbone().atoms)
-        if self.drop_sidechains:
-            if isinstance(value, bs.AtomArray):
-                value = value[filter_backbone(value)]
+            if self.drop_sidechains:
+                value = value.backbone()
+            return super().encode_example(value.atoms)
         return super().encode_example(value)
 
     def decode_example(self, encoded: dict, token_per_repo_id=None) -> "Protein":
         atoms = super().decode_example(encoded, token_per_repo_id=token_per_repo_id)
-        return Protein(atoms[filter_amino_acids(atoms)])
+        return Protein(
+            atoms[filter_amino_acids(atoms)], backbone_only=self.backbone_only
+        )
