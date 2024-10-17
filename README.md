@@ -107,7 +107,7 @@ def examples_generator(pdb_file_list):
 # create a dataset which will save data to disk as a foldcomp-encoded byte string, but which will automatically
 # decode that data to biotite atom arrays during loading / iteration
 features = Features(structure=ProteinStructureFeature(encode_with_foldcomp=True))
-ds = Dataset.from_generator(examples_generator, gen_kwargs={"pdb_file_list": pdb_file_list}, features=features, cache_dir=temp_dir)
+ds = Dataset.from_generator(examples_generator, gen_kwargs={"pdb_file_list": pdb_file_list}, features=features)
 ds[0]
 
 # share your bio dataset to the HuggingFace hub!

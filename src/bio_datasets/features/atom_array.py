@@ -579,13 +579,21 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         elif isinstance(value, (str, os.PathLike)):
             if os.path.exists(value):
                 file_type = xsplitext(value)[1][1:].lower()
-                return self.encode_example(load_structure(value, format=file_type))
+                return self.encode_example(
+                    load_structure(
+                        value, format=file_type, extra_fields=self.extra_fields
+                    )
+                )
         elif isinstance(value, bytes):
             # assume it encodes file contents.
             # TODO: automatically check for foldcomp format
             file_type = infer_bytes_format(value)
             fhandler = BytesIO(value)
-            return self.encode_example(load_structure(fhandler, format=file_type))
+            return self.encode_example(
+                load_structure(
+                    fhandler, format=file_type, extra_fields=self.extra_fields
+                )
+            )
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
 
@@ -728,9 +736,7 @@ class StructureFeature(_AtomArrayFeatureMixin, Feature):
         This determines what gets written to the Arrow file.
         TODO: accept Protein as input?
         """
-        file_type = infer_type_from_structure_file_dict(
-            value, extra_fields=self.extra_fields
-        )
+        file_type = infer_type_from_structure_file_dict(value)
         if isinstance(value, str):
             return {"path": value, "bytes": None, "type": file_type}
         elif isinstance(value, bytes):
