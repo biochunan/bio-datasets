@@ -123,6 +123,59 @@ def set_annotation_at_masked_atoms(
         getattr(atoms, annot_name)[atoms.mask] = new_annot[atoms.mask]
 
 
+def create_complete_atom_array_from_aa_index(
+    aa_index: np.ndarray, chain_id: Union[str, np.ndarray]
+):
+    """
+    Populate annotations from aa_index, assuming all atoms are present.
+    """
+    residue_sizes = RESIDUE_SIZES[
+        aa_index
+    ]  # (n_residues,) NOT (n_atoms,) -- add 1 to account for OXT
+    if isinstance(chain_id, str):
+        residue_sizes[-1] += 1  # final OXT
+    else:
+        assert len(chain_id) == len(residue_sizes)
+        final_residue_in_chain = chain_id != np.concatenate([chain_id[1:], ["ZZZZ"]])
+        residue_sizes[final_residue_in_chain] += 1
+    residue_starts = np.concatenate(
+        [[0], np.cumsum(residue_sizes)[:-1]]
+    )  # (n_residues,)
+    new_atom_array = bs.AtomArray(length=np.sum(residue_sizes))
+    residue_index = (
+        np.cumsum(get_residue_starts_mask(new_atom_array, residue_starts)) - 1
+    )
+
+    full_annot_names = []
+    if isinstance(chain_id, str):
+        new_atom_array.chain_id = np.full(len(new_atom_array), chain_id)
+    else:
+        new_atom_array.chain_id = chain_id[residue_index]
+    full_annot_names.append("chain_id")
+
+    # final atom in chain is OXT
+    oxt_mask = new_atom_array.chain_id != np.concatenate(
+        [new_atom_array.chain_id[1:], ["ZZZZ"]]
+    )
+    relative_atom_index = np.arange(len(new_atom_array)) - residue_starts[residue_index]
+    atom_names = new_atom_array.atom_name
+    atom_names[oxt_mask] = "OXT"
+    atom_names[~oxt_mask] = STANDARD_ATOMS_BY_RESIDUE[
+        new_atom_array.aa_index[~oxt_mask],
+        relative_atom_index[~oxt_mask],
+    ]
+    new_atom_array.set_annotation("atom_name", atom_names)
+    new_atom_array.set_annotation("aa_index", aa_index[residue_index])
+    new_atom_array.set_annotation(
+        "res_name", np.array(resnames)[new_atom_array.aa_index]
+    )
+    new_atom_array.set_annotation("residue_index", residue_index)
+    new_atom_array.set_annotation("res_id", residue_index + 1)
+    full_annot_names += ["atom_name", "aa_index", "res_name", "residue_index", "res_id"]
+
+    return new_atom_array, residue_starts, full_annot_names
+
+
 # TODO: add support for batched application of these functions (i.e. to multiple proteins at once)
 class Protein:
 
@@ -221,56 +274,31 @@ class Protein:
                 f"HETATMs are not supported."
             )
 
-        # we need to add these indices to expected residue starts
-        expected_residue_sizes = RESIDUE_SIZES[
-            atoms.aa_index[self._residue_starts]
-        ]  # (n_residues,) NOT (n_atoms,) -- add 1 to account for OXT
-        expected_residue_sizes[final_residue_in_chain[self._residue_starts]] += 1
-        expected_residue_starts = np.concatenate(
-            [[0], np.cumsum(expected_residue_sizes)[:-1]]
-        )  # (n_residues,)
-        expected_atom_indices = (
-            expected_residue_starts[atoms.residue_index]
-            + expected_relative_atom_indices
+        (
+            new_atom_array,
+            full_residue_starts,
+            full_annot_names,
+        ) = create_complete_atom_array_from_aa_index(atoms.aa_index, atoms.chain_id)
+        existing_atom_indices_in_full_array = (
+            full_residue_starts[atoms.residue_index] + expected_relative_atom_indices
         ).astype(int)
 
-        new_atom_array = bs.AtomArray(length=np.sum(expected_residue_sizes))
         for annot_name, annot in atoms._annot.items():
-            if annot_name in ["atom37_index", "aa_index", "residue_index", "mask"]:
+            if annot_name in ["atom37_index", "mask"] or annot_name in full_annot_names:
                 continue
-            getattr(new_atom_array, annot_name)[expected_atom_indices] = annot
+            getattr(new_atom_array, annot_name)[
+                existing_atom_indices_in_full_array
+            ] = annot
 
         # set_annotation vs setattr: set_annotation adds to annot and verifies size
-        new_atom_array.coord[expected_atom_indices] = atoms.coord
-        new_atom_array.set_annotation(
-            "residue_index",
-            np.cumsum(get_residue_starts_mask(new_atom_array, expected_residue_starts))
-            - 1,
-        )
+        new_atom_array.coord[existing_atom_indices_in_full_array] = atoms.coord
         # if we can create a res start index for each atom, we can assign the value based on that...
-        assert len(expected_residue_starts) == len(self._residue_starts)
-        atomwise_residue_starts = self._residue_starts[new_atom_array.residue_index]
+        assert len(full_residue_starts) == len(self._residue_starts)
         new_atom_array.set_annotation(
-            "res_name", atoms.res_name[atomwise_residue_starts]
-        )
-        new_atom_array.set_annotation("res_id", atoms.res_id[atomwise_residue_starts])
-        new_atom_array.set_annotation(
-            "aa_index", atoms.aa_index[atomwise_residue_starts]
-        )
-        relative_atom_index = (
-            np.arange(len(new_atom_array))
-            - expected_residue_starts[new_atom_array.residue_index]
-        )
-        new_atom_array.chain_id = atoms.chain_id[atomwise_residue_starts]
-        expected_atom_names = new_atom_array.atom_name
-        # final atom in chain is OXT
-        expected_oxt_mask = new_atom_array.chain_id != np.concatenate(
-            [new_atom_array.chain_id[1:], ["ZZZZ"]]
-        )
-        expected_atom_names[expected_oxt_mask] = "OXT"
-        expected_atom_names[~expected_oxt_mask] = STANDARD_ATOMS_BY_RESIDUE[
-            new_atom_array.aa_index[~expected_oxt_mask],
-            relative_atom_index[~expected_oxt_mask],
+            "res_id", atoms.res_id[self._residue_starts][new_atom_array.residue_index]
+        )  # override with auth res id
+        new_atom_array.chain_id = atoms.chain_id[self._residue_starts][
+            new_atom_array.residue_index
         ]
 
         new_atom_array.set_annotation(
@@ -281,7 +309,7 @@ class Protein:
             new_atom_array.atom_name != ""
         ), "All atoms must be assigned a name"
         mask = np.zeros(len(new_atom_array), dtype=bool)
-        mask[expected_atom_indices] = True
+        mask[existing_atom_indices_in_full_array] = True
         missing_atoms_strings = [
             f"{res_name} {res_id} {atom_name}"
             for res_name, res_id, atom_name in zip(
@@ -293,7 +321,7 @@ class Protein:
         if verbose:
             print("Filled in missing atoms:\n", "\n".join(missing_atoms_strings))
         new_atom_array.set_annotation("mask", mask)
-        return new_atom_array, expected_residue_starts
+        return new_atom_array, full_residue_starts
 
     @property
     def chain_id(self):

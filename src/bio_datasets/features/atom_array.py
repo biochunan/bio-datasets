@@ -33,7 +33,13 @@ from datasets.utils.py_utils import no_op_if_value_is_null, string_to_dict
 
 from bio_datasets import config as bio_config
 from bio_datasets.protein import constants as protein_constants
-from bio_datasets.protein.protein import BACKBONE_ATOMS, Protein, filter_backbone
+from bio_datasets.protein.protein import (
+    BACKBONE_ATOMS,
+    Protein,
+    create_complete_atom_array_from_aa_index,
+    filter_backbone,
+    get_residue_starts_mask,
+)
 
 if bio_config.FOLDCOMP_AVAILABLE:
     import foldcomp
@@ -314,7 +320,6 @@ class _AtomArrayFeatureMixin:
     with_element: bool = False
     with_ins_code: bool = False
     with_hetero: bool = False
-    all_atoms_present: bool = False
 
     @property
     def extra_fields(self):
@@ -411,6 +416,9 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     bonds.
     """
 
+    all_atoms_present: ClassVar[
+        bool
+    ] = False  # to use this, need to be decoding to Protein (ProteinAtomArrayFeature)
     requires_encoding: bool = True
     requires_decoding: bool = True
     decode: bool = True
@@ -425,22 +433,6 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
     _type: str = field(
         default="AtomArray", init=False, repr=False
     )  # registered feature name
-
-    @classmethod
-    def from_preset(cls, preset: str):
-        if preset == "afdb":
-            return cls(
-                with_b_factor=True,
-                b_factor_is_plddt=True,
-                # b_factor_dtype="uint8"
-                b_factor_dtype="float16",
-                coords_dtype="float16",
-                all_atoms_present=True,
-            )
-        elif preset == "pdb":
-            return cls(with_b_factor=False, coords_dtype="float16")
-        else:
-            raise ValueError(f"Unknown preset: {preset}")
 
     def _make_features_dict(self):
         features = [
@@ -624,34 +616,55 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
         """
         # TODO: null check
         # TODO: optimise this...if we set format to numpy, everything is a numpy array which should be ideal
-        num_atoms = len(value["atom_name"])
-        is_start_mask = np.zeros(num_atoms, dtype=bool)
-        is_start_mask[value.pop("residue_starts")] = True
-        residue_index = np.cumsum(is_start_mask) - 1
-        if "res_id" not in value:
-            value["res_id"] = residue_index + 1  # 1-based residue ids
-        # residue-level annotations -> atom-level annotations
-        value["aa_index"] = value["aa_index"][residue_index]
-        if "chain_id" in value:
-            value["chain_id"] = value["chain_id"][residue_index]
-        if self.b_factor_is_plddt and "b_factor" in value:
-            value["b_factor"] = value["b_factor"][residue_index]
+        num_atoms = len(value["coords"])
+        if self.all_atoms_present:
+            aa_index = value.pop("aa_index")
+            if self.chain_id is None:
+                chain_id = value.pop("chain_id")  # residue-level annotation
+            else:
+                chain_id = np.full(len(aa_index), self.chain_id)
+            atoms, residue_starts, _ = create_complete_atom_array_from_aa_index(
+                aa_index, chain_id
+            )
+            residue_index = (
+                np.cumsum(get_residue_starts_mask(atoms, residue_starts)) - 1
+            )
+        else:
+            atoms = bs.AtomArray(num_atoms)
+            residue_starts = value.pop("residue_starts")
+            residue_index = (
+                np.cumsum(get_residue_starts_mask(atoms, residue_starts)) - 1
+            )
+            # residue-level annotations -> atom-level annotations
+            if "res_id" in value:
+                atoms.set_annotation("res_id", value.pop("res_id")[residue_index])
+            else:
+                atoms.set_annotation("res_id", residue_index + 1)  # 1-based residue ids
+            atoms.set_annotation("aa_index", value.pop("aa_index")[residue_index])
+            if "chain_id" in value:
+                atoms.set_annotation("chain_id", value.pop("chain_id")[residue_index])
+            elif self.chain_id is not None:
+                atoms.set_annotation("chain_id", np.full(num_atoms, self.chain_id))
+            atoms.set_annotation(
+                "res_name", np.array(protein_constants.resnames)[atoms.aa_index]
+            )
 
-        arr = bs.AtomArray(num_atoms)
-        value["res_name"] = np.array(protein_constants.resnames)[value["aa_index"]]
-        arr.coord = value.pop("coords")
+        if self.b_factor_is_plddt and "b_factor" in value:
+            atoms.set_annotation("b_factor", value.pop("b_factor")[residue_index])
+
+        atoms.coord = value.pop("coords")
         if "bond_edges" in value:
             bonds_array = value.pop("bond_edges")
             bond_types = value.pop("bond_types")
             bonds_array = np.concatenate([bonds_array, bond_types[:, None]], axis=1)
             bonds = bs.BondList(num_atoms, bonds_array)
-            arr.bond_list = bonds
-        for key, value in value.items():
-            arr.set_annotation(key, value)
-        if self.chain_id is not None:
-            arr.set_annotation("chain_id", np.array([self.chain_id] * num_atoms))
+            atoms.bond_list = bonds
 
-        return arr
+        # anything left in value is an atom-level annotation
+        for key, value in value.items():
+            atoms.set_annotation(key, value)
+
+        return atoms
 
 
 @dataclass
@@ -837,11 +850,28 @@ class ProteinStructureFeature(StructureFeature):
 @dataclass
 class ProteinAtomArrayFeature(AtomArrayFeature):
 
+    all_atoms_present: bool = False
     drop_sidechains: bool = False
     internal_coords_type: str = None  # foldcomp, idealised, or pnerf
     _type: str = field(
         default="Protein", init=False, repr=False
     )  # registered feature name
+
+    @classmethod
+    def from_preset(cls, preset: str):
+        if preset == "afdb":
+            return cls(
+                with_b_factor=True,
+                b_factor_is_plddt=True,
+                # b_factor_dtype="uint8"
+                b_factor_dtype="float16",
+                coords_dtype="float16",
+                all_atoms_present=True,
+            )
+        elif preset == "pdb":
+            return cls(with_b_factor=False, coords_dtype="float16")
+        else:
+            raise ValueError(f"Unknown preset: {preset}")
 
     def encode_example(self, value: Union[Protein, dict, bs.AtomArray]) -> dict:
         if isinstance(value, bs.AtomArray):
