@@ -19,7 +19,7 @@ The main formats we support for storing and loading protein data are:
 
 | Feature name |   Storage format    |  Loaded as  |
 | ------------ | --------------------| ------------|
-|  AtomArrayFeature / ProteinAtomArrayFeature  | arrays of cartesian or (*experimental*) discretised internal coordinates and annotations | `biotite.structure.AtomArray` / `bio_datasets.Protein` (lightweight wrapper around `biotite.structure.AtomArray`)|
+|  AtomArrayFeature / ProteinAtomArrayFeature  | arrays of cartesian or (*experimental*) discretised internal coordinates and annotations | `biotite.structure.AtomArray` / `bio_datasets.Protein` (lightweight wrapper around `AtomArray`)|
 |  StructureFeature / ProteinStructureFeature   | byte string encoded file format embedded into parquet columns: PDB / compressed PDB (gzip / foldcomp fcz) | `biotite.sturcture.AtomArray` / `bio_datasets.Protein` |
 
 
