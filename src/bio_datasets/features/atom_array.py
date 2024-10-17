@@ -517,6 +517,8 @@ class AtomArrayFeature(_AtomArrayFeatureMixin, Feature):
                 )
             return self.encode_example(value)
         elif isinstance(value, bs.AtomArray):
+            if self.all_atoms_present:
+                value = Protein.standardise_atoms(value)
             residue_starts = get_residue_starts(value)
             if len(value) > 65535:
                 raise ValueError(

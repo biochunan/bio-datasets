@@ -201,10 +201,10 @@ class Protein:
         """
         atoms = atoms[filter_amino_acids(atoms)]
         assert np.unique(atoms.chain_id).size == 1, "Only a single chain is supported"
-        self._residue_starts = get_residue_starts(atoms)
+        residue_starts = get_residue_starts(atoms)
         self._set_atom_annotations(atoms)
-        self.atoms, self._residue_starts = self._standardise_atoms(
-            atoms, verbose=verbose
+        self.atoms, self._residue_starts = self.standardise_atoms(
+            atoms, residue_starts, verbose=verbose
         )
         self._standardised = True
 
@@ -226,7 +226,10 @@ class Protein:
             np.cumsum(get_residue_starts_mask(atoms, self._residue_starts)) - 1,
         )
 
-    def _standardise_atoms(self, atoms, verbose: bool = False):
+    @staticmethod
+    def standardise_atoms(
+        atoms, residue_starts: Optional[np.ndarray] = None, verbose: bool = False
+    ):
         """We want all atoms to be present, with nan coords if any are missing.
 
         We also want to ensure that atoms are in the correct order.
@@ -238,16 +241,18 @@ class Protein:
         This standardisation ensures that methods like `backbone_positions`,`to_atom14`,
         and `to_atom37` can be applied safely downstream.
         """
+        if residue_starts is None:
+            residue_starts = get_residue_starts(atoms)
         # first we get an array of atom indices for each residue (i.e. a mapping from atom37 index to expected index
         # then we index into this array to get the expected index for each atom
         expected_relative_atom_indices = ATOM37_TO_RELATIVE_ATOM_INDEX_MAPPING[
             atoms.aa_index, atoms.atom37_index
         ]
-        final_residue_in_chain = atoms.chain_id[self._residue_starts] != np.concatenate(
-            [atoms.chain_id[self._residue_starts][1:], ["ZZZZ"]]
+        final_residue_in_chain = atoms.chain_id[residue_starts] != np.concatenate(
+            [atoms.chain_id[residue_starts][1:], ["ZZZZ"]]
         )
         final_residue_in_chain = tile_residue_annotation_to_atoms(
-            atoms, final_residue_in_chain, self._residue_starts
+            atoms, final_residue_in_chain, residue_starts
         )
         oxt_mask = (atoms.atom_name == "OXT") & final_residue_in_chain
         if np.any(oxt_mask):
@@ -293,11 +298,11 @@ class Protein:
         # set_annotation vs setattr: set_annotation adds to annot and verifies size
         new_atom_array.coord[existing_atom_indices_in_full_array] = atoms.coord
         # if we can create a res start index for each atom, we can assign the value based on that...
-        assert len(full_residue_starts) == len(self._residue_starts)
+        assert len(full_residue_starts) == len(residue_starts)
         new_atom_array.set_annotation(
-            "res_id", atoms.res_id[self._residue_starts][new_atom_array.residue_index]
+            "res_id", atoms.res_id[residue_starts][new_atom_array.residue_index]
         )  # override with auth res id
-        new_atom_array.chain_id = atoms.chain_id[self._residue_starts][
+        new_atom_array.chain_id = atoms.chain_id[residue_starts][
             new_atom_array.residue_index
         ]
 
